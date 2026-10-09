@@ -1,0 +1,7 @@
+{
+  "name": "Amar Bank - Sistem Kredit & Piutang",
+  "description": "Sistem pencatatan kredit, piutang, dan manajemen angsuran profesional Amar Bank dengan portal admin dan portal nasabah mandiri.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
