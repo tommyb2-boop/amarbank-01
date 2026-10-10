@@ -11,6 +11,7 @@ import { NotificationModal } from './NotificationModal';
 import { AdminProfileSettingsModal } from './AdminProfileSettingsModal';
 import { ResetDataModal } from './ResetDataModal';
 import { LoanReceiptModal } from './LoanReceiptModal';
+import { BackupRestoreModal } from './BackupRestoreModal';
 import { PWAInstallButton } from './PWAInstallButton';
 import { downloadSpreadsheet, openEmailBackup, backupDatabaseJSON } from '../utils/exporter';
 import {
@@ -98,6 +99,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
   const [isNotificationModalOpen, setIsNotificationModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
+  const [backupRestoreMode, setBackupRestoreMode] = useState<'BACKUP' | 'RESTORE' | null>(null);
   const [newlyCreatedLoanReceipt, setNewlyCreatedLoanReceipt] = useState<Loan | null>(null);
   const [preselectedCustomerId, setPreselectedCustomerId] = useState<string | undefined>(undefined);
   const [preselectedLoanId, setPreselectedLoanId] = useState<string | undefined>(undefined);
@@ -1096,39 +1098,30 @@ Apakah ada yang dapat kami bantu mengenai informasi pembiayaan Anda? Terima kasi
             {/* SEKSI 2: BACKUP & RESTORE DATABASE KE LOKAL (JSON) */}
             <div className="p-5 bg-white rounded-2xl border border-slate-200 shadow-xs space-y-3">
               <span className="text-[10px] font-bold tracking-wider text-indigo-800 bg-indigo-50 px-2 py-0.5 rounded">
-                DATABASE LOKAL (JSON)
+                INTEGRASI GOOGLE DRIVE & LOKAL (.JSON)
               </span>
               <h3 className="text-sm font-bold text-slate-900 mt-1">
-                Backup Database ke Lokal & Restore File
+                Backup Database (.json) & Restore File
               </h3>
               <p className="text-xs text-slate-600 leading-relaxed">
-                Simpan salinan database lengkap aplikasi dalam format JSON ke perangkat Anda, dan pulihkan (restore) kapan saja untuk memuat ulang data sebelumnya.
+                Pilih untuk menyimpan salinan cadangan database langsung ke perangkat lokal Anda atau sinkronkan ke Google Drive (dilengkapi catatan tanggal backup). Anda juga dapat memulihkan database dari file lokal atau Google Drive kapan saja.
               </p>
 
               <div className="pt-1 flex flex-wrap gap-2.5">
                 <button
-                  onClick={() =>
-                    backupDatabaseJSON({
-                      customers,
-                      loans,
-                      payments,
-                      systemSettings,
-                      exportedAt: new Date().toISOString(),
-                      version: '1.0',
-                    })
-                  }
+                  onClick={() => setBackupRestoreMode('BACKUP')}
                   className="py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs flex items-center gap-2 transition-colors shadow-sm cursor-pointer"
                 >
                   <Download className="w-4 h-4" />
-                  <span>Backup Database ke Lokal (.json)</span>
+                  <span>Backup Database (.json / Drive)</span>
                 </button>
 
                 <button
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={() => setBackupRestoreMode('RESTORE')}
                   className="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs flex items-center gap-2 transition-colors shadow-sm cursor-pointer"
                 >
                   <Upload className="w-4 h-4" />
-                  <span>Restore Database dari File (.json)</span>
+                  <span>Restore Database (.json / Drive)</span>
                 </button>
               </div>
             </div>
@@ -1368,6 +1361,20 @@ Apakah ada yang dapat kami bantu mengenai informasi pembiayaan Anda? Terima kasi
             alert('Semua data nasabah dan piutang telah dibersihkan! Aplikasi kini dalam status bersih tanpa debitur.');
           }}
           onClose={() => setIsResetModalOpen(false)}
+        />
+      )}
+
+      {backupRestoreMode && (
+        <BackupRestoreModal
+          mode={backupRestoreMode}
+          customers={customers}
+          loans={loans}
+          payments={payments}
+          systemSettings={systemSettings}
+          onRestoreData={(data) => {
+            onRestoreData(data);
+          }}
+          onClose={() => setBackupRestoreMode(null)}
         />
       )}
 
