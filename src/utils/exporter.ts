@@ -180,9 +180,10 @@ export function backupDatabaseJSON(
     systemSettings?: any;
     exportedAt: string;
     version: string;
+    backupNote?: string;
   }
 ) {
-  const dateStr = new Date().toISOString().split('T')[0];
+  const dateStr = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const jsonString = JSON.stringify(payload, null, 2);
   const blob = new Blob([jsonString], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
