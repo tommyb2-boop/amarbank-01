@@ -1,23 +1,23 @@
 import { AdminUser, Customer, Loan, Payment, NotificationItem, SystemSettings } from '../types';
 
 export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
-  cityName: 'Bumiayu',
-  branchName: 'AMAR BANK BUMIAYU',
+  cityName: 'Surabaya',
+  branchName: 'PT BANK AMAR INDONESIA Tbk',
   divisionName: 'Divisi Manajemen Piutang & Pembiayaan Ritel',
   branchAddress: 'Graha Amar, Jl. Basuki Rahmat 122',
   branchPhone: '(031) 567-8910',
   officialWhatsApp: '0812-9876-5432',
-  responsibleName: 'Tomi Budiawan',
+  responsibleName: 'Bambang Prasetyo, S.E.',
   responsibleTitle: 'Head of Retail & Credit Admin',
 };
 
 export const INITIAL_ADMINS: AdminUser[] = [
   {
     id: 'ADM-001',
-    fullName: 'Tomi Budiawan',
+    fullName: 'Bambang Prasetyo',
     email: 'dicoba.ngetes@gmail.com',
     phone: '081298765432',
-    pin: '000000',
+    pin: '987654',
     createdAt: '2026-01-10T08:00:00.000Z',
   },
 ];
