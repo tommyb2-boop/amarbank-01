@@ -11,10 +11,11 @@ export function usePWAInstall() {
   const [isIOS, setIsIOS] = useState(false);
 
   useEffect(() => {
-    // Detect standalone mode (already installed or running as standalone PWA)
+    // Detect standalone mode (already installed or running as standalone PWA WebAPK)
     const isStandalone =
       window.matchMedia('(display-mode: standalone)').matches ||
-      (window.navigator as unknown as { standalone?: boolean }).standalone === true;
+      (window.navigator as unknown as { standalone?: boolean }).standalone === true ||
+      document.referrer.includes('android-app://');
     setIsInstalled(isStandalone);
 
     // Detect iOS devices
@@ -22,14 +23,24 @@ export function usePWAInstall() {
     const isIOSDevice = /iphone|ipad|ipod/.test(userAgent);
     setIsIOS(isIOSDevice);
 
+    // Check if beforeinstallprompt was already captured globally
+    if ((window as any).__deferredPWAInstallPrompt) {
+      setDeferredPrompt((window as any).__deferredPWAInstallPrompt);
+    }
+
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
-      setDeferredPrompt(e as BeforeInstallPromptEvent);
+      const promptEvent = e as BeforeInstallPromptEvent;
+      (window as any).__deferredPWAInstallPrompt = promptEvent;
+      setDeferredPrompt(promptEvent);
+      console.log('PWA: beforeinstallprompt event captured successfully!');
     };
 
     const handleAppInstalled = () => {
       setIsInstalled(true);
       setDeferredPrompt(null);
+      (window as any).__deferredPWAInstallPrompt = null;
+      console.log('PWA: Amar Bank successfully installed as app!');
     };
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
