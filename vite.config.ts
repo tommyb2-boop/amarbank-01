@@ -22,6 +22,7 @@ export default defineConfig(() => {
           display: 'standalone',
           start_url: '/',
           scope: '/',
+          categories: ['finance', 'business', 'productivity'],
           icons: [
             {
               src: '/pwa-192x192.png',
@@ -36,10 +37,27 @@ export default defineConfig(() => {
               purpose: 'any',
             },
             {
-              src: '/pwa-512x512.png',
+              src: '/pwa-maskable-512x512.png',
               sizes: '512x512',
               type: 'image/png',
               purpose: 'maskable',
+            },
+          ],
+          prefer_related_applications: false,
+          screenshots: [
+            {
+              src: '/screenshot-mobile.png',
+              sizes: '540x960',
+              type: 'image/png',
+              form_factor: 'narrow',
+              label: 'Portal Amar Bank di Perangkat Seluler',
+            },
+            {
+              src: '/screenshot-wide.png',
+              sizes: '1280x720',
+              type: 'image/png',
+              form_factor: 'wide',
+              label: 'Dashboard Manajemen Amar Bank',
             },
           ],
         },
