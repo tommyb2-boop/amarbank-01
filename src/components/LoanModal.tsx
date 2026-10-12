@@ -26,9 +26,9 @@ export const LoanModal: React.FC<LoanModalProps> = ({
   const [itemDescription, setItemDescription] = useState<string>('');
   const [principalAmount, setPrincipalAmount] = useState<number>(5000000);
   const [dpAmount, setDpAmount] = useState<number>(0);
-  const [marginPercentage, setMarginPercentage] = useState<number>(5);
-  const [isCustomMargin, setIsCustomMargin] = useState<boolean>(false);
-  const [customMarginInput, setCustomMarginInput] = useState<string>('5');
+  const [marginPercentStr, setMarginPercentStr] = useState<string>('5');
+  const [marginRupiahStr, setMarginRupiahStr] = useState<string>('250000');
+  const [lastEditedMargin, setLastEditedMargin] = useState<'PERCENT' | 'RUPIAH'>('PERCENT');
   const [tenorCount, setTenorCount] = useState<number>(6);
   const [tenorUnit, setTenorUnit] = useState<TenorUnit>('BULAN');
   const [startDate, setStartDate] = useState<string>(
@@ -44,13 +44,87 @@ export const LoanModal: React.FC<LoanModalProps> = ({
     return `LN-${todayStr}-${String(count).padStart(3, '0')}`;
   }, [existingLoans]);
 
+  // Sinkronisasi dua arah kotak margin (admin bebas isi salah satu):
+  // 1. Jika admin input di kotak %, hitung otomatis kotak Rupiah
+  const handlePercentChange = (valStr: string) => {
+    setMarginPercentStr(valStr);
+    setLastEditedMargin('PERCENT');
+    const p = parseFloat(valStr);
+    const net = Math.max(0, (Number(principalAmount) || 0) - (Number(dpAmount) || 0));
+    if (!isNaN(p) && valStr.trim() !== '') {
+      const calculatedRupiah = Math.round((net * p) / 100);
+      setMarginRupiahStr(String(calculatedRupiah));
+    } else {
+      setMarginRupiahStr('0');
+    }
+  };
+
+  // 2. Jika admin input di kotak Rupiah, hitung otomatis kotak %
+  const handleRupiahChange = (rawStr: string) => {
+    const cleanDigits = rawStr.replace(/\D/g, '');
+    setMarginRupiahStr(cleanDigits);
+    setLastEditedMargin('RUPIAH');
+    const numRupiah = Number(cleanDigits) || 0;
+    const net = Math.max(0, (Number(principalAmount) || 0) - (Number(dpAmount) || 0));
+    if (net > 0 && cleanDigits !== '') {
+      const calculatedPercent = parseFloat(((numRupiah / net) * 100).toFixed(2));
+      setMarginPercentStr(String(calculatedPercent));
+    } else {
+      setMarginPercentStr('0');
+    }
+  };
+
+  // 3. Jika Pokok Kredit berubah, sinkronkan nilai kotak pasangan
+  const handlePrincipalChange = (newPrincipal: number) => {
+    setPrincipalAmount(newPrincipal);
+    const net = Math.max(0, newPrincipal - (Number(dpAmount) || 0));
+    if (lastEditedMargin === 'PERCENT') {
+      const p = parseFloat(marginPercentStr) || 0;
+      setMarginRupiahStr(String(Math.round((net * p) / 100)));
+    } else {
+      const r = Number(marginRupiahStr) || 0;
+      if (net > 0) {
+        setMarginPercentStr(String(parseFloat(((r / net) * 100).toFixed(2))));
+      } else {
+        setMarginPercentStr('0');
+      }
+    }
+  };
+
+  // 4. Jika Uang Muka (DP) berubah, sinkronkan nilai kotak pasangan
+  const handleDpChange = (newDp: number) => {
+    setDpAmount(newDp);
+    const net = Math.max(0, (Number(principalAmount) || 0) - newDp);
+    if (lastEditedMargin === 'PERCENT') {
+      const p = parseFloat(marginPercentStr) || 0;
+      setMarginRupiahStr(String(Math.round((net * p) / 100)));
+    } else {
+      const r = Number(marginRupiahStr) || 0;
+      if (net > 0) {
+        setMarginPercentStr(String(parseFloat(((r / net) * 100).toFixed(2))));
+      } else {
+        setMarginPercentStr('0');
+      }
+    }
+  };
+
   // Real-time calculations
   const calculation = useMemo(() => {
     const principal = Number(principalAmount) || 0;
     const dp = Number(dpAmount) || 0;
     const netPrincipal = Math.max(0, principal - dp);
-    const margin = Number(marginPercentage) || 0;
-    const marginAmount = Math.round((netPrincipal * margin) / 100);
+
+    let marginAmount = 0;
+    let marginPercentage = 0;
+
+    if (lastEditedMargin === 'RUPIAH') {
+      marginAmount = Math.max(0, Number(marginRupiahStr) || 0);
+      marginPercentage = netPrincipal > 0 ? parseFloat(((marginAmount / netPrincipal) * 100).toFixed(2)) : 0;
+    } else {
+      marginPercentage = Math.max(0, parseFloat(marginPercentStr) || 0);
+      marginAmount = Math.round((netPrincipal * marginPercentage) / 100);
+    }
+
     const totalBill = netPrincipal + marginAmount;
     const tCount = Math.max(1, Number(tenorCount) || 1);
     const installmentPerPeriod = Math.round(totalBill / tCount);
@@ -60,22 +134,14 @@ export const LoanModal: React.FC<LoanModalProps> = ({
 
     return {
       netPrincipal,
+      marginPercentage,
       marginAmount,
       totalBill,
       installmentPerPeriod,
       dueDate,
       nextDueDate,
     };
-  }, [principalAmount, dpAmount, marginPercentage, tenorCount, tenorUnit, startDate]);
-
-  const presetMargins = [
-    { label: '0% (Bebas Riba)', val: 0 },
-    { label: '2.5%', val: 2.5 },
-    { label: '5%', val: 5 },
-    { label: '10%', val: 10 },
-    { label: '15%', val: 15 },
-    { label: '20%', val: 20 },
-  ];
+  }, [principalAmount, dpAmount, marginPercentStr, marginRupiahStr, lastEditedMargin, tenorCount, tenorUnit, startDate]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -110,7 +176,7 @@ export const LoanModal: React.FC<LoanModalProps> = ({
       principalAmount,
       dpAmount,
       netPrincipal: calculation.netPrincipal,
-      marginPercentage,
+      marginPercentage: calculation.marginPercentage,
       marginAmount: calculation.marginAmount,
       totalBill: calculation.totalBill,
       tenorCount,
@@ -266,7 +332,7 @@ export const LoanModal: React.FC<LoanModalProps> = ({
                   min={100000}
                   step={50000}
                   value={principalAmount || ''}
-                  onChange={(e) => setPrincipalAmount(Number(e.target.value))}
+                  onChange={(e) => handlePrincipalChange(Number(e.target.value))}
                   className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 focus:border-blue-700 font-mono text-xs font-semibold text-slate-900 outline-none"
                 />
               </div>
@@ -283,73 +349,73 @@ export const LoanModal: React.FC<LoanModalProps> = ({
                   min={0}
                   step={50000}
                   value={dpAmount || 0}
-                  onChange={(e) => setDpAmount(Number(e.target.value))}
+                  onChange={(e) => handleDpChange(Number(e.target.value))}
                   className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 focus:border-blue-700 font-mono text-xs font-semibold text-slate-900 outline-none"
                 />
               </div>
             </div>
           </div>
 
-          {/* PERHITUNGAN MARGIN / BUNGA PERSENTASE (%) */}
-          <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2.5">
+          {/* PERHITUNGAN MARGIN / BUNGA (2 KOTAK INPUT MANUAL: % & RUPIAH) */}
+          {/* PERHITUNGAN MARGIN / BUNGA (2 KOTAK INPUT MANUAL: % & RUPIAH) */}
+          <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2.5">
             <div className="flex items-center justify-between">
               <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
                 <Percent className="w-4 h-4 text-blue-900" />
-                <span>Margin Keuntungan / Bunga (%):</span>
+                <span>Margin Keuntungan / Bunga *</span>
               </label>
-              <span className="text-xs font-mono font-bold text-blue-900 bg-blue-100/70 px-2 py-0.5 rounded">
-                {marginPercentage}%
+              <span className="text-[10px] text-blue-900 font-semibold bg-blue-100/70 px-2 py-0.5 rounded-full">
+                Bebas Isi Salah Satu
               </span>
             </div>
 
-            {/* Tombol Pilihan Persentase Instan */}
-            <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
-              {presetMargins.map((item) => (
-                <button
-                  key={item.val}
-                  type="button"
-                  onClick={() => {
-                    setMarginPercentage(item.val);
-                    setIsCustomMargin(false);
-                  }}
-                  className={`py-1.5 px-2 rounded-lg text-xs font-medium transition-all cursor-pointer ${
-                    !isCustomMargin && marginPercentage === item.val
-                      ? 'bg-blue-900 text-white shadow-xs'
-                      : 'bg-white hover:bg-slate-200 border border-slate-200 text-slate-700'
-                  }`}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Custom margin input toggle */}
-            <div className="pt-1 flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setIsCustomMargin(!isCustomMargin)}
-                className="text-[11px] text-blue-800 underline hover:text-blue-950 cursor-pointer"
-              >
-                {isCustomMargin ? 'Gunakan pilihan preset instan' : '+ Masukkan persentase custom lainnya'}
-              </button>
-
-              {isCustomMargin && (
-                <div className="flex items-center gap-1 ml-auto">
+            {/* 2 KOTAK INPUT: PERSENTASE (%) & RUPIAH (Rp) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-0.5">
+              {/* Nilai Persentase (%) */}
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-700 mb-1 flex items-center justify-between">
+                  <span>Persentase (%)</span>
+                  {lastEditedMargin === 'PERCENT' && (
+                    <span className="text-[10px] text-blue-800 font-bold bg-blue-100/80 px-1.5 py-0.5 rounded">
+                      Aktif Diedit
+                    </span>
+                  )}
+                </label>
+                <div className="relative">
                   <input
                     type="number"
-                    step="0.1"
+                    step="any"
                     min="0"
-                    max="100"
-                    value={customMarginInput}
-                    onChange={(e) => {
-                      setCustomMarginInput(e.target.value);
-                      setMarginPercentage(parseFloat(e.target.value) || 0);
-                    }}
-                    className="w-16 px-2 py-1 bg-white border border-slate-300 rounded text-xs font-mono text-center outline-none"
+                    placeholder="0"
+                    value={marginPercentStr}
+                    onChange={(e) => handlePercentChange(e.target.value)}
+                    className="w-full pl-3.5 pr-8 py-2.5 rounded-xl border border-slate-300 focus:border-blue-700 font-mono text-xs font-bold text-slate-900 outline-none bg-white shadow-xs"
                   />
-                  <span className="text-xs font-bold text-slate-500">%</span>
+                  <span className="absolute right-3 top-2.5 text-xs font-bold text-slate-500">%</span>
                 </div>
-              )}
+              </div>
+
+              {/* Nilai Rupiah (Rp) */}
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-700 mb-1 flex items-center justify-between">
+                  <span>Rupiah (Rp)</span>
+                  {lastEditedMargin === 'RUPIAH' && (
+                    <span className="text-[10px] text-blue-800 font-bold bg-blue-100/80 px-1.5 py-0.5 rounded">
+                      Aktif Diedit
+                    </span>
+                  )}
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-2.5 text-xs font-bold text-slate-400">Rp</span>
+                  <input
+                    type="text"
+                    placeholder="0"
+                    value={marginRupiahStr ? Number(marginRupiahStr).toLocaleString('id-ID') : ''}
+                    onChange={(e) => handleRupiahChange(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 focus:border-blue-700 font-mono text-xs font-bold text-slate-900 outline-none bg-white shadow-xs"
+                  />
+                </div>
+              </div>
             </div>
           </div>
 
@@ -417,7 +483,7 @@ export const LoanModal: React.FC<LoanModalProps> = ({
                 </p>
               </div>
               <div>
-                <span className="text-slate-600">Margin ({marginPercentage}%):</span>
+                <span className="text-slate-600">Margin ({calculation.marginPercentage}%):</span>
                 <p className="font-mono font-semibold text-blue-900">
                   + {formatRupiah(calculation.marginAmount)}
                 </p>

@@ -15,9 +15,12 @@ import {
   CheckCircle,
   Clock,
   ShieldCheck,
-  ChevronRight
+  ChevronRight,
+  RefreshCw,
+  Loader2,
+  CheckCircle2,
 } from 'lucide-react';
-
+import { fetchLatestCustomersFromFirebase } from '../utils/firebaseSync';
 
 interface CustomerPortalProps {
   currentCustomer: Customer;
@@ -25,6 +28,7 @@ interface CustomerPortalProps {
   payments: Payment[];
   adminPhone: string;
   onLogout: () => void;
+  onUpdateCustomerData?: (updatedCustomers: Customer[]) => void;
 }
 
 export const CustomerPortal: React.FC<CustomerPortalProps> = ({
@@ -33,8 +37,11 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({
   payments,
   adminPhone,
   onLogout,
+  onUpdateCustomerData,
 }) => {
   const [selectedReceipt, setSelectedReceipt] = useState<Payment | null>(null);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // STRICT ZERO-LEAKAGE DATA ISOLATION: Filter ONLY current customer's data!
   const myLoans = useMemo(
@@ -74,6 +81,32 @@ Terima kasih.`;
     window.open(link, '_blank');
   };
 
+  // Unduh data pelanggan saja dari Firebase untuk menyelaraskan data login & akun
+  const handleUpdate = async () => {
+    setIsUpdating(true);
+    setFeedback(null);
+    try {
+      const updatedCustomers = await fetchLatestCustomersFromFirebase();
+      if (updatedCustomers.length > 0 && onUpdateCustomerData) {
+        onUpdateCustomerData(updatedCustomers);
+      }
+      setFeedback({
+        type: 'success',
+        message: 'Data pelanggan berhasil diperbarui dari Firebase!',
+      });
+      setTimeout(() => setFeedback(null), 4000);
+    } catch (err: any) {
+      console.error(err);
+      setFeedback({
+        type: 'error',
+        message: 'Gagal memperbarui data dari Firebase. Periksa koneksi internet.',
+      });
+      setTimeout(() => setFeedback(null), 5000);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-100 pb-20">
       
@@ -82,7 +115,22 @@ Terima kasih.`;
         <div className="max-w-xl mx-auto flex items-center justify-between">
           <AmarBankLogo size="sm" showText={true} />
           
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            {/* Tombol UPDATE Pelanggan */}
+            <button
+              onClick={handleUpdate}
+              disabled={isUpdating}
+              title="Perbarui data pelanggan dari Firebase Cloud"
+              className="py-1.5 px-2.5 sm:px-3 rounded-xl bg-blue-900 hover:bg-blue-800 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+            >
+              {isUpdating ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-300" />
+              ) : (
+                <RefreshCw className="w-3.5 h-3.5 text-cyan-300" />
+              )}
+              <span>Update</span>
+            </button>
+
             <PWAInstallButton />
             <div className="text-right hidden sm:block">
               <span className="text-xs font-bold text-slate-900 block leading-tight">
@@ -106,6 +154,30 @@ Terima kasih.`;
 
       {/* Main Content Area */}
       <main className="max-w-xl mx-auto p-4 space-y-4">
+        {feedback && (
+          <div
+            className={`p-3 rounded-2xl text-xs flex items-center justify-between shadow-xs border animate-in fade-in ${
+              feedback.type === 'success'
+                ? 'bg-emerald-600 text-white border-emerald-500'
+                : 'bg-rose-600 text-white border-rose-500'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              {feedback.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-white" />
+              ) : (
+                <AlertCircle className="w-4 h-4 shrink-0 text-white" />
+              )}
+              <span className="font-semibold">{feedback.message}</span>
+            </div>
+            <button
+              onClick={() => setFeedback(null)}
+              className="text-white/80 hover:text-white text-xs px-2 py-0.5 rounded cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+        )}
         
         {/* Welcome Greeting & Customer Card */}
         <div className="p-4 bg-gradient-to-br from-blue-900 via-blue-800 to-indigo-900 rounded-3xl text-white shadow-xl shadow-blue-900/15 relative overflow-hidden">

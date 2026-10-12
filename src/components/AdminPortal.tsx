@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { AdminUser, Customer, Loan, Payment, NotificationItem, LoanStatus, SystemSettings } from '../types';
-import { formatRupiah, formatDateIndo, createWhatsAppLink } from '../utils/formatters';
+import { formatRupiah, formatDateIndo, formatDateTimeIndo, createWhatsAppLink } from '../utils/formatters';
 import { AmarBankLogo } from './AmarBankLogo';
 import { CustomerModal } from './CustomerModal';
 import { LoanModal } from './LoanModal';
@@ -11,9 +11,9 @@ import { NotificationModal } from './NotificationModal';
 import { AdminProfileSettingsModal } from './AdminProfileSettingsModal';
 import { ResetDataModal } from './ResetDataModal';
 import { LoanReceiptModal } from './LoanReceiptModal';
-import { BackupRestoreModal } from './BackupRestoreModal';
 import { PWAInstallButton } from './PWAInstallButton';
 import { downloadSpreadsheet, openEmailBackup, backupDatabaseJSON } from '../utils/exporter';
+import { backupDatabaseToFirebase, fetchLatestFromFirebase } from '../utils/firebaseSync';
 import {
   Users,
   CreditCard,
@@ -36,7 +36,13 @@ import {
   Trash2,
   Building,
   CheckCircle2,
-  CircleUserRound
+  CircleUserRound,
+  Cloud,
+  CloudUpload,
+  RefreshCw,
+  Loader2,
+  HardDrive,
+  Save,
 } from 'lucide-react';
 
 interface AdminPortalProps {
@@ -99,12 +105,25 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
   const [isNotificationModalOpen, setIsNotificationModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
-  const [backupRestoreMode, setBackupRestoreMode] = useState<'BACKUP' | 'RESTORE' | null>(null);
+  const [isUploadingToFirebase, setIsUploadingToFirebase] = useState(false);
+  const [isUpdatingFromFirebase, setIsUpdatingFromFirebase] = useState(false);
+  const [isTestingFirebase, setIsTestingFirebase] = useState(false);
+  const [firebaseStatusInfo, setFirebaseStatusInfo] = useState<{
+    status: 'connected' | 'idle' | 'error';
+    lastExport?: string;
+    customersCount?: number;
+    loansCount?: number;
+    message?: string;
+  }>({ status: 'idle' });
+  const [syncFeedback, setSyncFeedback] = useState<{
+    type: 'success' | 'error' | 'info';
+    message: string;
+  } | null>(null);
   const [newlyCreatedLoanReceipt, setNewlyCreatedLoanReceipt] = useState<Loan | null>(null);
   const [preselectedCustomerId, setPreselectedCustomerId] = useState<string | undefined>(undefined);
   const [preselectedLoanId, setPreselectedLoanId] = useState<string | undefined>(undefined);
 
-  // Hidden File Input Ref for Restore Database
+  // Hidden File Input Ref for Restore Database from local JSON file
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Search & Filters
@@ -205,7 +224,38 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
     );
   }, [payments, paymentSearch]);
 
-  // Handle Restore Database from JSON
+  // 1. Langsung Backup ke Perangkat Lokal (.json) dengan catatan tanggal & waktu
+  const handleDirectBackupLocal = () => {
+    try {
+      const now = new Date();
+      const backupDateIso = now.toISOString();
+      const backupDateFormatted = formatDateIndo(backupDateIso);
+      const note = `Cadangan Database Amar Bank Lokal (${backupDateFormatted})`;
+
+      backupDatabaseJSON({
+        customers,
+        loans,
+        payments,
+        systemSettings,
+        exportedAt: backupDateIso,
+        version: '2.0-local',
+        backupNote: note,
+      });
+
+      setSyncFeedback({
+        type: 'success',
+        message: `Database berhasil diunduh ke perangkat lokal Anda! (${backupDateFormatted})`,
+      });
+      setTimeout(() => setSyncFeedback(null), 5000);
+    } catch (err: any) {
+      setSyncFeedback({
+        type: 'error',
+        message: `Gagal mengunduh cadangan lokal: ${err?.message || 'Error'}`,
+      });
+    }
+  };
+
+  // 2. Langsung Restore Database dari File Lokal (.json)
   const handleRestoreFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -215,26 +265,151 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
       try {
         const payload = JSON.parse(event.target?.result as string);
         if (Array.isArray(payload.customers) && Array.isArray(payload.loans) && Array.isArray(payload.payments)) {
-          const confirmMsg = `Konfirmasi Pemulihan Database:
-- ${payload.customers.length} Data Nasabah
-- ${payload.loans.length} Data Akad Kredit
-- ${payload.payments.length} Riwayat Pembayaran
-
-Data saat ini akan digantikan dengan data cadangan ini. Lanjutkan?`;
-
-          if (window.confirm(confirmMsg)) {
-            onRestoreData(payload);
-            alert('Database Amar Bank berhasil dipulihkan!');
-          }
+          onRestoreData(payload);
+          setSyncFeedback({
+            type: 'success',
+            message: `Database berhasil dipulihkan dari berkas lokal "${file.name}"! (${payload.customers.length} Nasabah, ${payload.loans.length} Akad, ${payload.payments.length} Angsuran)`,
+          });
+          setTimeout(() => setSyncFeedback(null), 6000);
         } else {
-          alert('Format file JSON tidak valid. Pastikan file adalah hasil cadangan dari sistem Amar Bank.');
+          setSyncFeedback({
+            type: 'error',
+            message: 'Format file JSON tidak valid. Pastikan file adalah hasil cadangan database Amar Bank.',
+          });
         }
-      } catch (err) {
-        alert('Terjadi kesalahan saat membaca file JSON cadangan.');
+      } catch (err: any) {
+        setSyncFeedback({
+          type: 'error',
+          message: `Gagal membaca file JSON cadangan: ${err?.message || 'Format tidak sesuai'}`,
+        });
       }
     };
     reader.readAsText(file);
     e.target.value = '';
+  };
+
+  // 3. Tombol UPLOAD: Mengirim seluruh database aktif ke Firebase Firestore & selaraskan aplikasi
+  const handleUploadToFirebase = async () => {
+    setIsUploadingToFirebase(true);
+    setSyncFeedback(null);
+    try {
+      const now = new Date();
+      const dateFormatted = formatDateIndo(now.toISOString());
+      const note = `Backup Unggahan Admin Amar Bank (${dateFormatted})`;
+
+      const result = await backupDatabaseToFirebase(
+        {
+          customers,
+          loans,
+          payments,
+          systemSettings,
+          admins: [currentAdmin],
+        },
+        note,
+        currentAdmin.fullName || 'Admin Amar Bank'
+      );
+
+      // Selaraskan data aplikasi
+      onRestoreData({
+        customers,
+        loans,
+        payments,
+        systemSettings,
+      });
+
+      setSyncFeedback({
+        type: 'success',
+        message: `Berhasil Upload ke Firebase Cloud! Seluruh data aplikasi telah tersinkronisasi. (${formatDateIndo(result.timestamp)})`,
+      });
+      setTimeout(() => setSyncFeedback(null), 6000);
+    } catch (err: any) {
+      console.error(err);
+      setSyncFeedback({
+        type: 'error',
+        message: `Gagal upload ke Firebase: ${err?.message || 'Periksa koneksi internet'}`,
+      });
+    } finally {
+      setIsUploadingToFirebase(false);
+    }
+  };
+
+  // 4. Tombol UPDATE: Mendownload data terbaru dari Firebase Firestore & memperbarui data aplikasi
+  const handleUpdateFromFirebase = async () => {
+    setIsUpdatingFromFirebase(true);
+    setSyncFeedback(null);
+    try {
+      const cloudData = await fetchLatestFromFirebase();
+      if (!cloudData) {
+        setSyncFeedback({
+          type: 'info',
+          message: 'Belum ada data cadangan yang tersimpan di Firebase Cloud.',
+        });
+        return;
+      }
+
+      onRestoreData({
+        customers: cloudData.customers || [],
+        loans: cloudData.loans || [],
+        payments: cloudData.payments || [],
+        systemSettings: cloudData.systemSettings,
+      });
+
+      setSyncFeedback({
+        type: 'success',
+        message: `Berhasil Update data dari Firebase Cloud! (${cloudData.customers?.length || 0} Nasabah, ${cloudData.loans?.length || 0} Akad, ${cloudData.payments?.length || 0} Angsuran diperbarui)`,
+      });
+      setTimeout(() => setSyncFeedback(null), 6000);
+    } catch (err: any) {
+      console.error(err);
+      setSyncFeedback({
+        type: 'error',
+        message: `Gagal update dari Firebase: ${err?.message || 'Periksa koneksi internet'}`,
+      });
+    } finally {
+      setIsUpdatingFromFirebase(false);
+    }
+  };
+
+  // 5. Uji Cek Koneksi Langsung ke Firebase Firestore
+  const handleTestFirebaseConnection = async () => {
+    setIsTestingFirebase(true);
+    try {
+      const cloudData = await fetchLatestFromFirebase();
+      if (cloudData) {
+        setFirebaseStatusInfo({
+          status: 'connected',
+          lastExport: cloudData.exportedAt,
+          customersCount: cloudData.customers?.length || 0,
+          loansCount: cloudData.loans?.length || 0,
+          message: 'Firebase Firestore Aktif & Terhubung ke Proyek: gen-lang-client-0985161510',
+        });
+        setSyncFeedback({
+          type: 'success',
+          message: `Firebase Terhubung! Database di cloud memiliki ${cloudData.customers?.length || 0} Nasabah & ${cloudData.loans?.length || 0} Pinjaman.`,
+        });
+      } else {
+        setFirebaseStatusInfo({
+          status: 'connected',
+          message: 'Koneksi Firestore Berhasil terhubung ke proyek gen-lang-client-0985161510 (Dokumen cloud belum diunggah, silakan klik tombol Upload).',
+        });
+        setSyncFeedback({
+          type: 'info',
+          message: 'Koneksi Firestore Berhasil terhubung ke gen-lang-client-0985161510!',
+        });
+      }
+      setTimeout(() => setSyncFeedback(null), 6000);
+    } catch (err: any) {
+      setFirebaseStatusInfo({
+        status: 'error',
+        message: err?.message || 'Gagal terhubung ke Firebase Firestore',
+      });
+      setSyncFeedback({
+        type: 'error',
+        message: `Gagal uji koneksi Firebase: ${err?.message || 'Periksa koneksi'}`,
+      });
+    } finally {
+      setIsTestingFirebase(false);
+    }
   };
 
   return (
@@ -254,14 +429,51 @@ Data saat ini akan digantikan dengan data cadangan ini. Lanjutkan?`;
         <div className="max-w-4xl mx-auto flex items-center justify-between">
           <AmarBankLogo size="sm" showText={true} />
 
-          <div className="flex items-center gap-2">
-            {/* PWA Install Button */}
-            <PWAInstallButton />
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            {/* Tombol UPLOAD (Kirim Data ke Firebase) */}
+            <button
+              onClick={handleUploadToFirebase}
+              disabled={isUploadingToFirebase || isUpdatingFromFirebase}
+              title="Kirim (Upload) seluruh database aktif ke Firebase Cloud"
+              className="py-1.5 px-2.5 sm:px-3 rounded-xl bg-blue-900 hover:bg-blue-800 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+            >
+              {isUploadingToFirebase ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-300" />
+              ) : (
+                <CloudUpload className="w-3.5 h-3.5 text-amber-300" />
+              )}
+              <span className="hidden xs:inline sm:inline">Upload</span>
+            </button>
+
+            {/* Tombol UPDATE (Download dari Firebase memperbaharui data aplikasi) */}
+            <button
+              onClick={handleUpdateFromFirebase}
+              disabled={isUploadingToFirebase || isUpdatingFromFirebase}
+              title="Download data terbaru dari Firebase Cloud untuk memperbaharui aplikasi"
+              className="py-1.5 px-2.5 sm:px-3 rounded-xl bg-indigo-900 hover:bg-indigo-800 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+            >
+              {isUpdatingFromFirebase ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-300" />
+              ) : (
+                <RefreshCw className="w-3.5 h-3.5 text-cyan-300" />
+              )}
+              <span className="hidden xs:inline sm:inline">Update</span>
+            </button>
+
+            {/* Tombol Cetak PDF di Atas Jendela Admin */}
+            <button
+              onClick={() => setIsReportModalOpen(true)}
+              title="Buka & Cetak Laporan PDF"
+              className="py-1.5 px-2.5 sm:px-3 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+            >
+              <FileText className="w-3.5 h-3.5 text-cyan-300" />
+              <span className="hidden xs:inline sm:inline">Cetak PDF</span>
+            </button>
 
             {/* Notification Bell with Badge */}
             <button
               onClick={() => setIsNotificationModalOpen(true)}
-              className="relative p-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
+              className="relative p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
               title="Notifikasi & Jatuh Tempo"
             >
               <Bell className="w-4 h-4 text-slate-800" />
@@ -297,6 +509,35 @@ Data saat ini akan digantikan dengan data cadangan ini. Lanjutkan?`;
 
       {/* 2. MAIN APP CONTENT CONTAINER */}
       <main className="max-w-4xl mx-auto p-4 md:p-6 space-y-5">
+        {/* Sync Feedback Toast / Banner */}
+        {syncFeedback && (
+          <div
+            className={`p-3.5 rounded-2xl text-xs flex items-center justify-between gap-3 shadow-md border animate-in fade-in slide-in-from-top duration-200 ${
+              syncFeedback.type === 'success'
+                ? 'bg-emerald-600 text-white border-emerald-500'
+                : syncFeedback.type === 'error'
+                ? 'bg-rose-600 text-white border-rose-500'
+                : 'bg-blue-600 text-white border-blue-500'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              {syncFeedback.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-white" />
+              ) : syncFeedback.type === 'error' ? (
+                <AlertTriangle className="w-4 h-4 shrink-0 text-white" />
+              ) : (
+                <Cloud className="w-4 h-4 shrink-0 text-white" />
+              )}
+              <span className="font-semibold">{syncFeedback.message}</span>
+            </div>
+            <button
+              onClick={() => setSyncFeedback(null)}
+              className="text-white/80 hover:text-white text-xs font-bold px-2 py-0.5 rounded cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+        )}
         
         {/* ========================================================= */}
         {/* TAB 1: BERANDA (OVERVIEW DASHBOARD) */}
@@ -1039,147 +1280,193 @@ Apakah ada yang dapat kami bantu mengenai informasi pembiayaan Anda? Terima kasi
         {/* TAB 5: EKSPOR LAPORAN PDF, PENGATURAN & BACKUP DATA */}
         {/* ========================================================= */}
         {activeTab === 'LAPORAN' && (
-          <div className="space-y-4">
-            <div>
-              <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-900 flex items-center justify-center">
-                  <CircleUserRound className="w-5 h-5" />
+          <div className="space-y-3.5">
+            {/* Header & Aksi Cepat Atas */}
+            <div className="space-y-2.5">
+              {/* Tombol Instal Aplikasi & Aksi Atas */}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <PWAInstallButton />
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => setIsReportModalOpen(true)}
+                    className="py-1.5 px-3 rounded-xl bg-blue-900 hover:bg-blue-800 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
+                  >
+                    <FileText className="w-3.5 h-3.5 text-cyan-300" />
+                    <span>Buka & Cetak Laporan PDF</span>
+                  </button>
+
+                  <button
+                    onClick={() => setIsSettingsModalOpen(true)}
+                    className="py-1.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
+                  >
+                    <Settings className="w-3.5 h-3.5" />
+                    <span>Edit Profil Admin & Kota PDF</span>
+                  </button>
                 </div>
-                <span>Menu Admin, Laporan & Pengaturan Database</span>
-              </h2>
-              <p className="text-xs text-slate-500">
-                Kelola profil admin, nama kota PDF, backup/restore database, serta cetak laporan resmi
-              </p>
+              </div>
+
+              <div>
+                <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-900 flex items-center justify-center">
+                    <CircleUserRound className="w-5 h-5" />
+                  </div>
+                  <span>Menu Admin, Laporan & Pengaturan Database</span>
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Kelola profil admin, nama kota PDF, backup/restore database, serta cetak laporan resmi
+                </p>
+              </div>
             </div>
 
-            {/* SEKSI 1: EDIT PROFIL ADMIN & PENGATURAN SISTEM */}
-            <div className="p-5 bg-white rounded-2xl border border-slate-200 shadow-xs space-y-3">
-              <div className="flex items-start justify-between">
-                <div>
-                  <span className="text-[10px] font-bold tracking-wider text-blue-900 bg-blue-50 px-2 py-0.5 rounded">
-                    ADMIN & KEPEMILIKAN APLIKASI
+            {/* SEKSI 1: BACKUP DATABASE KE LOKAL & RESTORE DARI FILE (.JSON) */}
+            <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs space-y-2.5">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-bold tracking-wider text-blue-900 bg-blue-50 px-2.5 py-0.5 rounded-full border border-blue-200/60 flex items-center gap-1.5">
+                  <HardDrive className="w-3 h-3 text-blue-700" />
+                  <span>CADANGAN & PEMULIHAN LOKAL</span>
+                </span>
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">
+                  Backup Database ke Lokal & Restore dari File (.json)
+                </h3>
+                <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
+                  Unduh berkas cadangan database ke perangkat lokal Anda (.json), atau pulihkan database langsung dari berkas cadangan.
+                </p>
+              </div>
+
+              <div className="pt-0.5 flex flex-wrap gap-2">
+                {/* Tombol 1: Backup ke Lokal (.json) */}
+                <button
+                  onClick={handleDirectBackupLocal}
+                  className="py-2 px-3.5 rounded-xl bg-blue-900 hover:bg-blue-800 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5 text-emerald-300" />
+                  <span>Backup ke Lokal (.json)</span>
+                </button>
+
+                {/* Tombol 2: Restore dari File (.json) */}
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="py-2 px-3.5 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
+                >
+                  <Upload className="w-3.5 h-3.5 text-cyan-300" />
+                  <span>Restore dari File (.json)</span>
+                </button>
+              </div>
+            </div>
+
+            {/* SEKSI 2: INTEGRASI FIREBASE CLOUD (STATUS & KONEKTIVITAS PROYEK - SLIM) */}
+            <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-bold tracking-wider text-emerald-800 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1.5">
+                    <Cloud className="w-3 h-3 text-emerald-600" />
+                    <span>STATUS FIREBASE CLOUD</span>
                   </span>
-                  <h3 className="text-sm font-bold text-slate-900 mt-1">
-                    Profil Admin, PIN Login & Nama Kota PDF
-                  </h3>
-                  <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
-                    Ubah email resmi, PIN login admin, nama kota penandatanganan PDF ({systemSettings.cityName}), serta detail identitas kantor cabang Amar Bank.
-                  </p>
-                </div>
-              </div>
-
-              {/* Status info bar */}
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <div>
-                  <span className="text-slate-400 text-[10px] block">Admin Pengelola:</span>
-                  <span className="font-semibold text-slate-800">{currentAdmin.fullName}</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 text-[10px] block">Email Pemulihan:</span>
-                  <span className="font-semibold text-slate-800 truncate block">{currentAdmin.email}</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 text-[10px] block">Kota Tertera di PDF:</span>
-                  <span className="font-bold text-blue-900">{systemSettings.cityName}</span>
-                </div>
-              </div>
-
-              <div className="pt-1">
-                <button
-                  onClick={() => setIsSettingsModalOpen(true)}
-                  className="py-2.5 px-4 rounded-xl bg-blue-900 hover:bg-blue-800 text-white font-semibold text-xs flex items-center gap-2 transition-colors shadow-sm cursor-pointer"
-                >
-                  <Settings className="w-4 h-4" />
-                  <span>Edit Profil Admin & Pengaturan Kota PDF</span>
-                </button>
-              </div>
-            </div>
-
-            {/* SEKSI 2: BACKUP & RESTORE DATABASE KE LOKAL (JSON) */}
-            <div className="p-5 bg-white rounded-2xl border border-slate-200 shadow-xs space-y-3">
-              <span className="text-[10px] font-bold tracking-wider text-indigo-800 bg-indigo-50 px-2 py-0.5 rounded">
-                INTEGRASI GOOGLE DRIVE & LOKAL (.JSON)
-              </span>
-              <h3 className="text-sm font-bold text-slate-900 mt-1">
-                Backup Database (.json) & Restore File
-              </h3>
-              <p className="text-xs text-slate-600 leading-relaxed">
-                Pilih untuk menyimpan salinan cadangan database langsung ke perangkat lokal Anda atau sinkronkan ke Google Drive (dilengkapi catatan tanggal backup). Anda juga dapat memulihkan database dari file lokal atau Google Drive kapan saja.
-              </p>
-
-              <div className="pt-1 flex flex-wrap gap-2.5">
-                <button
-                  onClick={() => setBackupRestoreMode('BACKUP')}
-                  className="py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs flex items-center gap-2 transition-colors shadow-sm cursor-pointer"
-                >
-                  <Download className="w-4 h-4" />
-                  <span>Backup Database (.json / Drive)</span>
-                </button>
-
-                <button
-                  onClick={() => setBackupRestoreMode('RESTORE')}
-                  className="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs flex items-center gap-2 transition-colors shadow-sm cursor-pointer"
-                >
-                  <Upload className="w-4 h-4" />
-                  <span>Restore Database (.json / Drive)</span>
-                </button>
-              </div>
-            </div>
-
-            {/* SEKSI 3: EKSPOR LAPORAN PDF RESMI */}
-            <div className="p-5 bg-white rounded-2xl border border-slate-200 shadow-xs space-y-3">
-              <div className="flex items-start justify-between">
-                <div>
-                  <span className="text-[10px] font-bold tracking-wider text-blue-900 bg-blue-50 px-2 py-0.5 rounded">
-                    DOKUMEN RESMI
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-800">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    Terhubung & Siap
                   </span>
-                  <h3 className="text-sm font-bold text-slate-900 mt-1">
-                    Laporan Rekapitulasi PDF (Filter Rentang Tanggal)
-                  </h3>
-                  <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
-                    Menghasilkan lembar laporan formal dengan Kop Amar Bank, ringkasan keuangan, daftar kredit, tabel pembayaran, dan tanda tangan resmi di Kota {systemSettings.cityName}.
-                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={handleTestFirebaseConnection}
+                    disabled={isTestingFirebase}
+                    className="py-1.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    {isTestingFirebase ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-900" />
+                    ) : (
+                      <RefreshCw className="w-3.5 h-3.5 text-blue-900" />
+                    )}
+                    <span>Uji Koneksi</span>
+                  </button>
+
+                  <button
+                    onClick={handleUploadToFirebase}
+                    disabled={isUploadingToFirebase || isUpdatingFromFirebase}
+                    className="py-1.5 px-3 rounded-xl bg-blue-900 hover:bg-blue-800 disabled:opacity-50 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
+                  >
+                    {isUploadingToFirebase ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-300" />
+                    ) : (
+                      <CloudUpload className="w-3.5 h-3.5 text-amber-300" />
+                    )}
+                    <span>Upload</span>
+                  </button>
+
+                  <button
+                    onClick={handleUpdateFromFirebase}
+                    disabled={isUploadingToFirebase || isUpdatingFromFirebase}
+                    className="py-1.5 px-3 rounded-xl bg-indigo-900 hover:bg-indigo-800 disabled:opacity-50 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
+                  >
+                    {isUpdatingFromFirebase ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-300" />
+                    ) : (
+                      <RefreshCw className="w-3.5 h-3.5 text-cyan-300" />
+                    )}
+                    <span>Update</span>
+                  </button>
                 </div>
               </div>
 
-              <div className="pt-1">
-                <button
-                  onClick={() => setIsReportModalOpen(true)}
-                  className="py-2.5 px-4 rounded-xl bg-blue-900 hover:bg-blue-800 text-white font-semibold text-xs flex items-center gap-2 transition-colors shadow-sm cursor-pointer"
-                >
-                  <FileText className="w-4 h-4" />
-                  <span>Buka & Cetak Laporan PDF</span>
-                </button>
-              </div>
+              {/* Status Uji Koneksi */}
+              {firebaseStatusInfo.status === 'connected' && (
+                <div className="p-2.5 bg-emerald-50 rounded-xl border border-emerald-200 text-xs text-emerald-900 flex items-start gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold">{firebaseStatusInfo.message}</span>
+                    {firebaseStatusInfo.lastExport && (
+                      <span className="block text-[11px] text-emerald-700 mt-0.5">
+                        Cadangan Terakhir di Cloud: {formatDateTimeIndo(firebaseStatusInfo.lastExport)} ({firebaseStatusInfo.customersCount} Nasabah, {firebaseStatusInfo.loansCount} Akad)
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {firebaseStatusInfo.status === 'error' && (
+                <div className="p-2.5 bg-rose-50 rounded-xl border border-rose-200 text-xs text-rose-900 flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold">{firebaseStatusInfo.message}</span>
+                  </div>
+                </div>
+              )}
             </div>
 
-            {/* SEKSI 4: BACKUP SPREADSHEET (XLS / CSV) & EMAIL */}
-            <div className="p-5 bg-white rounded-2xl border border-slate-200 shadow-xs space-y-3">
+            {/* SEKSI 3: BACKUP SPREADSHEET (XLS / CSV) & EMAIL */}
+            <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs space-y-2.5">
               <span className="text-[10px] font-bold tracking-wider text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded">
                 SPREADSHEET EXCEL
               </span>
-              <h3 className="text-sm font-bold text-slate-900 mt-1">
-                Backup Data Lengkap ke Spreadsheet (.xls / Excel)
-              </h3>
-              <p className="text-xs text-slate-600 leading-relaxed">
-                Unduh rekapitulasi data nasabah, akad piutang, dan riwayat mutasi pembayaran ke dalam berkas Excel (.xls), atau kirimkan cadangan ke email admin.
-              </p>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">
+                  Backup Data Lengkap ke Spreadsheet (.xls / Excel)
+                </h3>
+                <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
+                  Unduh rekapitulasi data nasabah, akad piutang, dan riwayat mutasi pembayaran ke dalam berkas Excel (.xls), atau kirimkan cadangan ke email.
+                </p>
+              </div>
 
-              <div className="pt-1 flex flex-wrap gap-2.5">
+              <div className="pt-0.5 flex flex-wrap gap-2">
                 <button
                   onClick={() => downloadSpreadsheet(customers, loans, payments)}
-                  className="py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center gap-2 transition-colors shadow-sm cursor-pointer"
+                  className="py-2 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
                 >
-                  <Download className="w-4 h-4" />
+                  <Download className="w-3.5 h-3.5" />
                   <span>Unduh File Spreadsheet (.xls)</span>
                 </button>
 
                 <button
                   onClick={() => openEmailBackup(currentAdmin.email || 'dicoba.ngetes@gmail.com', customers, loans, payments)}
-                  className="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs flex items-center gap-2 transition-colors shadow-sm cursor-pointer"
+                  className="py-2 px-3.5 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
                 >
-                  <Mail className="w-4 h-4" />
-                  <span>Kirim ke Email ({currentAdmin.email || 'dicoba.ngetes@gmail.com'})</span>
+                  <Mail className="w-3.5 h-3.5" />
+                  <span>Kirim ke Email</span>
                 </button>
               </div>
             </div>
@@ -1358,23 +1645,12 @@ Apakah ada yang dapat kami bantu mengenai informasi pembiayaan Anda? Terima kasi
           onConfirmReset={() => {
             onResetAllData();
             setIsResetModalOpen(false);
-            alert('Semua data nasabah dan piutang telah dibersihkan! Aplikasi kini dalam status bersih tanpa debitur.');
+            setSyncFeedback({
+              type: 'info',
+              message: 'Semua data nasabah dan piutang telah dibersihkan! Aplikasi kini dalam status bersih tanpa debitur.',
+            });
           }}
           onClose={() => setIsResetModalOpen(false)}
-        />
-      )}
-
-      {backupRestoreMode && (
-        <BackupRestoreModal
-          mode={backupRestoreMode}
-          customers={customers}
-          loans={loans}
-          payments={payments}
-          systemSettings={systemSettings}
-          onRestoreData={(data) => {
-            onRestoreData(data);
-          }}
-          onClose={() => setBackupRestoreMode(null)}
         />
       )}
 

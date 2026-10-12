@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { AdminUser, Customer } from '../types';
 import { AmarBankLogo } from './AmarBankLogo';
 import { PWAInstallButton } from './PWAInstallButton';
-import { Lock, KeyRound, ShieldCheck, CheckCircle2, AlertCircle, ArrowRight } from 'lucide-react';
+import { Lock, KeyRound, ShieldCheck, CheckCircle2, AlertCircle, ArrowRight, RefreshCw, Loader2 } from 'lucide-react';
+import { fetchLatestCustomersFromFirebase } from '../utils/firebaseSync';
 
 interface AuthScreenProps {
   admins: AdminUser[];
@@ -10,6 +11,7 @@ interface AuthScreenProps {
   onAdminLogin: (admin: AdminUser) => void;
   onCustomerLogin: (customer: Customer) => void;
   onResetAdminPin?: (email: string, newPin: string) => void;
+  onSyncCustomers?: (customers: Customer[]) => void;
 }
 
 type PortalMode = 'ADMIN' | 'CUSTOMER';
@@ -19,8 +21,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   customers,
   onAdminLogin,
   onCustomerLogin,
+  onSyncCustomers,
 }) => {
   const [portalMode, setPortalMode] = useState<PortalMode>('ADMIN');
+  const [isUpdatingCustomers, setIsUpdatingCustomers] = useState(false);
 
   // Admin login states
   const [adminPin, setAdminPin] = useState('');
@@ -82,6 +86,25 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       onCustomerLogin(customer);
     } else {
       setErrorMessage('ID Pelanggan / No. HP atau PIN tidak sesuai. Hubungi Admin jika Anda lupa PIN.');
+    }
+  };
+
+  // Update data pelanggan dari Firebase agar pelanggan baru bisa login
+  const handleUpdateCustomersFromFirebase = async () => {
+    setIsUpdatingCustomers(true);
+    clearMessages();
+    try {
+      const cloudCustomers = await fetchLatestCustomersFromFirebase();
+      if (cloudCustomers.length > 0 && onSyncCustomers) {
+        onSyncCustomers(cloudCustomers);
+      }
+      setSuccessMessage(`Data pelanggan berhasil diperbarui dari Firebase! (${cloudCustomers.length} Nasabah terdaftar)`);
+      setTimeout(() => setSuccessMessage(''), 5000);
+    } catch (err: any) {
+      console.error(err);
+      setErrorMessage('Gagal memperbarui data pelanggan dari Firebase. Periksa koneksi.');
+    } finally {
+      setIsUpdatingCustomers(false);
     }
   };
 
@@ -208,8 +231,24 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                 <div className="w-11 h-11 bg-blue-50 text-blue-900 rounded-2xl flex items-center justify-center mx-auto mb-2 border border-blue-100">
                   <ShieldCheck className="w-6 h-6" />
                 </div>
-                <h3 className="text-base font-bold text-slate-900">Portal Mandiri Nasabah</h3>
-                <p className="text-xs text-slate-500">
+                <div className="flex items-center justify-center gap-2">
+                  <h3 className="text-base font-bold text-slate-900">Portal Mandiri Nasabah</h3>
+                  <button
+                    type="button"
+                    onClick={handleUpdateCustomersFromFirebase}
+                    disabled={isUpdatingCustomers}
+                    title="Perbarui data pelanggan dari Firebase Cloud untuk login akun terbaru"
+                    className="py-1 px-2.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-900 border border-blue-200 text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer"
+                  >
+                    {isUpdatingCustomers ? (
+                      <Loader2 className="w-3 h-3 animate-spin text-blue-700" />
+                    ) : (
+                      <RefreshCw className="w-3 h-3 text-blue-700" />
+                    )}
+                    <span>Update Data</span>
+                  </button>
+                </div>
+                <p className="text-xs text-slate-500 mt-1">
                   Akses aman & terisolasi untuk cek tagihan pribadi dan unduh kwitansi
                 </p>
               </div>
