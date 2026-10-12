@@ -12,6 +12,7 @@ import { AuthScreen } from './components/AuthScreen';
 import { AdminPortal } from './components/AdminPortal';
 import { CustomerPortal } from './components/CustomerPortal';
 import { getDaysDifference } from './utils/formatters';
+import { subscribeToFirebaseDatabase } from './utils/firebaseSync';
 import { Smartphone, Monitor } from 'lucide-react';
 
 const STORAGE_KEY_ADMINS = 'amar_bank_admins_v2';
@@ -173,6 +174,32 @@ export default function App() {
       console.error(e);
     }
   }, [currentUser]);
+
+  // Realtime Cloud Sync dengan Firebase Firestore
+  // Setiap kali ada backup atau pembaruan di Firebase, seluruh data web otomatis diselaraskan
+  useEffect(() => {
+    const unsubscribe = subscribeToFirebaseDatabase((cloudData) => {
+      if (cloudData) {
+        if (Array.isArray(cloudData.customers)) {
+          setCustomers(cloudData.customers);
+        }
+        if (Array.isArray(cloudData.loans)) {
+          setLoans(cloudData.loans);
+        }
+        if (Array.isArray(cloudData.payments)) {
+          setPayments(cloudData.payments);
+        }
+        if (cloudData.systemSettings) {
+          setSystemSettings(cloudData.systemSettings);
+        }
+        if (Array.isArray(cloudData.admins) && cloudData.admins.length > 0) {
+          setAdmins(cloudData.admins);
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   // Automatic Due-Date Check (≤ 3 days detection for notifications)
   useEffect(() => {
@@ -388,6 +415,9 @@ export default function App() {
             onAdminLogin={handleAdminLogin}
             onCustomerLogin={handleCustomerLogin}
             onResetAdminPin={handleResetAdminPin}
+            onSyncCustomers={(updatedCustomers) => {
+              setCustomers(updatedCustomers);
+            }}
           />
         )}
 
@@ -423,6 +453,17 @@ export default function App() {
             payments={payments}
             adminPhone={systemSettings.officialWhatsApp || activeAdmin.phone || '0812-9876-5432'}
             onLogout={handleLogout}
+            onUpdateCustomerData={(updatedCustomers) => {
+              setCustomers(updatedCustomers);
+              // Perbarui customerData pada session jika ada perubahan data profil pelanggan aktif
+              const refreshedCustomer = updatedCustomers.find((c) => c.id === currentUser.customerData?.id);
+              if (refreshedCustomer) {
+                setCurrentUser((prev) => ({
+                  ...prev,
+                  customerData: refreshedCustomer,
+                }));
+              }
+            }}
           />
         )}
       </div>
