@@ -8,7 +8,7 @@ import {
   Timestamp,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { Customer, Loan, Payment, SystemSettings, AdminUser } from '../types';
+import { Customer, Loan, Payment, SystemSettings, AdminUser, DebtRecord, TopupRecord } from '../types';
 
 // Inisialisasi Firebase App
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
@@ -18,6 +18,8 @@ export interface FirebaseDatabasePayload {
   customers: Customer[];
   loans: Loan[];
   payments: Payment[];
+  debts?: DebtRecord[];
+  topupRecords?: TopupRecord[];
   systemSettings?: SystemSettings;
   admins?: AdminUser[];
   exportedAt: string;
@@ -46,6 +48,8 @@ export async function backupDatabaseToFirebase(
     customers: Customer[];
     loans: Loan[];
     payments: Payment[];
+    debts?: DebtRecord[];
+    topupRecords?: TopupRecord[];
     systemSettings?: SystemSettings;
     admins?: AdminUser[];
   },
@@ -60,10 +64,12 @@ export async function backupDatabaseToFirebase(
       customers: data.customers || [],
       loans: data.loans || [],
       payments: data.payments || [],
+      debts: data.debts || [],
+      topupRecords: data.topupRecords || [],
       systemSettings: data.systemSettings,
       admins: data.admins,
       exportedAt: timestamp,
-      version: '2.0-firebase',
+      version: '2.1-firebase-neraca',
       updatedBy,
       note: note || `Backup otomatis ke Firebase Cloud`,
     };

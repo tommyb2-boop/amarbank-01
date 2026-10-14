@@ -177,6 +177,8 @@ export function backupDatabaseJSON(
     customers: Customer[];
     loans: Loan[];
     payments: Payment[];
+    debts?: any[];
+    topupRecords?: any[];
     systemSettings?: any;
     exportedAt: string;
     version: string;
