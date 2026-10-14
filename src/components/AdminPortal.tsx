@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef } from 'react';
-import { AdminUser, Customer, Loan, Payment, NotificationItem, LoanStatus, SystemSettings } from '../types';
+import { AdminUser, Customer, Loan, Payment, NotificationItem, LoanStatus, SystemSettings, DebtRecord, TopupRecord, DebtInstallment } from '../types';
 import { formatRupiah, formatDateIndo, formatDateTimeIndo, createWhatsAppLink } from '../utils/formatters';
 import { AmarBankLogo } from './AmarBankLogo';
 import { CustomerModal } from './CustomerModal';
@@ -12,13 +12,16 @@ import { AdminProfileSettingsModal } from './AdminProfileSettingsModal';
 import { ResetDataModal } from './ResetDataModal';
 import { LoanReceiptModal } from './LoanReceiptModal';
 import { PWAInstallButton } from './PWAInstallButton';
+import { NeracaKeuanganView } from './NeracaKeuanganView';
+import { HutangManagementView } from './HutangManagementView';
+import { TopupManagementView } from './TopupManagementView';
+import { GoogleDriveBackupModal } from './GoogleDriveBackupModal';
 import { downloadSpreadsheet, openEmailBackup, backupDatabaseJSON } from '../utils/exporter';
 import { backupDatabaseToFirebase, fetchLatestFromFirebase } from '../utils/firebaseSync';
 import {
   Users,
   CreditCard,
   Banknote,
-  FileSpreadsheet,
   Plus,
   Search,
   Bell,
@@ -34,7 +37,6 @@ import {
   Settings,
   ShieldAlert,
   Trash2,
-  Building,
   CheckCircle2,
   CircleUserRound,
   Cloud,
@@ -42,7 +44,16 @@ import {
   RefreshCw,
   Loader2,
   HardDrive,
-  Save,
+  ChevronDown,
+  ChevronUp,
+  Pencil,
+  Eye,
+  ArrowLeft,
+  Calendar,
+  Clock,
+  Sparkles,
+  Scale,
+  Smartphone,
 } from 'lucide-react';
 
 interface AdminPortalProps {
@@ -52,6 +63,8 @@ interface AdminPortalProps {
   loans: Loan[];
   payments: Payment[];
   notifications: NotificationItem[];
+  debts: DebtRecord[];
+  topupRecords: TopupRecord[];
   onAddCustomer: (customer: Customer) => void;
   onUpdateCustomer: (customer: Customer) => void;
   onAddLoan: (loan: Loan) => void;
@@ -59,6 +72,13 @@ interface AdminPortalProps {
   onMarkNotificationAsRead: (id: string) => void;
   onMarkAllNotificationsAsRead: () => void;
   onClearAllNotifications: () => void;
+  onAddDebt: (debt: DebtRecord) => void;
+  onUpdateDebt: (debt: DebtRecord) => void;
+  onDeleteDebt: (debtId: string) => void;
+  onAddDebtPayment: (debtId: string, installment: DebtInstallment) => void;
+  onAddTopup: (record: TopupRecord) => void;
+  onUpdateTopup: (record: TopupRecord) => void;
+  onDeleteTopup: (id: string) => void;
   onUpdateAdmin: (updatedAdmin: AdminUser) => void;
   onUpdateSystemSettings: (updatedSettings: SystemSettings) => void;
   onResetAllData: () => void;
@@ -66,12 +86,24 @@ interface AdminPortalProps {
     customers: Customer[];
     loans: Loan[];
     payments: Payment[];
+    debts?: DebtRecord[];
+    topupRecords?: TopupRecord[];
     systemSettings?: SystemSettings;
   }) => void;
   onLogout: () => void;
 }
 
-type TabType = 'BERANDA' | 'NASABAH' | 'KREDIT' | 'PEMBAYARAN' | 'LAPORAN';
+export type ViewType = 'NERACA' | 'KREDIT' | 'HUTANG' | 'TOPUP' | 'ADMIN';
+
+interface CustomerSummary {
+  totalPiutang: number;
+  totalTerbayar: number;
+  totalSisaPiutang: number;
+  activeLoansCount: number;
+  customerStatus: 'LANCAR' | 'MENUNGGAK' | 'PERHATIAN' | 'LUNAS' | 'BEBAS_TAGIHAN';
+  customerLoans: Loan[];
+  customerPayments: Payment[];
+}
 
 export const AdminPortal: React.FC<AdminPortalProps> = ({
   currentAdmin,
@@ -80,6 +112,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
   loans,
   payments,
   notifications,
+  debts,
+  topupRecords,
   onAddCustomer,
   onUpdateCustomer,
   onAddLoan,
@@ -87,15 +121,23 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
   onMarkNotificationAsRead,
   onMarkAllNotificationsAsRead,
   onClearAllNotifications,
+  onAddDebt,
+  onUpdateDebt,
+  onDeleteDebt,
+  onAddDebtPayment,
+  onAddTopup,
+  onUpdateTopup,
+  onDeleteTopup,
   onUpdateAdmin,
   onUpdateSystemSettings,
   onResetAllData,
   onRestoreData,
   onLogout,
 }) => {
-  const [activeTab, setActiveTab] = useState<TabType>('BERANDA');
+  // Ketika admin berhasil login -> Muncul jendela "Neraca Keuangan" (Default view)
+  const [activeView, setActiveView] = useState<ViewType>('NERACA');
 
-  // Modals
+  // Modals state
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
   const [customerToEdit, setCustomerToEdit] = useState<Customer | null>(null);
   const [isLoanModalOpen, setIsLoanModalOpen] = useState(false);
@@ -105,6 +147,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
   const [isNotificationModalOpen, setIsNotificationModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
+  const [isGoogleDriveModalOpen, setIsGoogleDriveModalOpen] = useState(false);
   const [isUploadingToFirebase, setIsUploadingToFirebase] = useState(false);
   const [isUpdatingFromFirebase, setIsUpdatingFromFirebase] = useState(false);
   const [isTestingFirebase, setIsTestingFirebase] = useState(false);
@@ -123,17 +166,26 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
   const [preselectedCustomerId, setPreselectedCustomerId] = useState<string | undefined>(undefined);
   const [preselectedLoanId, setPreselectedLoanId] = useState<string | undefined>(undefined);
 
+  // Expanded customers map for showing loan & payment details
+  const [expandedCustomers, setExpandedCustomers] = useState<Record<string, boolean>>({});
+
   // Hidden File Input Ref for Restore Database from local JSON file
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Search & Filters
-  const [customerSearch, setCustomerSearch] = useState('');
-  const [loanSearch, setLoanSearch] = useState('');
-  const [loanStatusFilter, setLoanStatusFilter] = useState<'ALL' | LoanStatus>('ALL');
-  const [paymentSearch, setPaymentSearch] = useState('');
+  // Search & Filter
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'LANCAR' | 'MENUNGGAK' | 'LUNAS'>('ALL');
 
   // Unread notifications count
   const unreadNotifCount = notifications.filter((n) => !n.isRead).length;
+
+  // Toggle expand customer
+  const toggleExpandCustomer = (customerId: string) => {
+    setExpandedCustomers((prev) => ({
+      ...prev,
+      [customerId]: !prev[customerId],
+    }));
+  };
 
   // Global Financial Statistics
   const financialStats = useMemo(() => {
@@ -141,110 +193,102 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
     const totalTerkumpul = payments.reduce((acc, p) => acc + p.amount, 0);
     const totalSisaPiutang = loans.reduce((acc, l) => acc + l.remainingBalance, 0);
     const activeLoansCount = loans.filter((l) => l.status !== 'LUNAS').length;
-    const attentionCount = loans.filter((l) => l.status === 'PERHATIAN').length;
     const overdueCount = loans.filter((l) => l.status === 'MENUNGGAK').length;
+    const attentionCount = loans.filter((l) => l.status === 'PERHATIAN').length;
 
     return {
       totalPiutang,
       totalTerkumpul,
       totalSisaPiutang,
       activeLoansCount,
-      attentionCount,
       overdueCount,
+      attentionCount,
     };
   }, [loans, payments]);
 
-  // Customer List with computed metrics per customer
-  const enrichedCustomers = useMemo(() => {
-    return customers.map((c) => {
-      const custLoans = loans.filter((l) => l.customerId === c.id);
-      const activeCustLoans = custLoans.filter((l) => l.remainingBalance > 0);
-      const totalSisa = custLoans.reduce((sum, l) => sum + l.remainingBalance, 0);
+  // Per-customer statistics calculator
+  const customerSummaries = useMemo(() => {
+    const map = new Map<string, CustomerSummary>();
 
-      // Determine payment smoothness status
-      let smoothness: LoanStatus = 'LANCAR';
-      if (custLoans.some((l) => l.status === 'MENUNGGAK')) {
-        smoothness = 'MENUNGGAK';
-      } else if (custLoans.some((l) => l.status === 'PERHATIAN')) {
-        smoothness = 'PERHATIAN';
-      } else if (custLoans.length > 0 && custLoans.every((l) => l.status === 'LUNAS')) {
-        smoothness = 'LUNAS';
+    customers.forEach((c) => {
+      const cLoans = loans.filter((l) => l.customerId === c.id);
+      const cPayments = payments.filter((p) => p.customerId === c.id);
+      const totalPiutang = cLoans.reduce((acc, l) => acc + l.totalBill, 0);
+      const totalTerbayar = cLoans.reduce((acc, l) => acc + l.totalPaid, 0);
+      const totalSisaPiutang = cLoans.reduce((acc, l) => acc + l.remainingBalance, 0);
+      const activeLoans = cLoans.filter((l) => l.status !== 'LUNAS');
+
+      let customerStatus: CustomerSummary['customerStatus'] = 'BEBAS_TAGIHAN';
+      if (cLoans.length === 0) {
+        customerStatus = 'BEBAS_TAGIHAN';
+      } else if (cLoans.some((l) => l.status === 'MENUNGGAK')) {
+        customerStatus = 'MENUNGGAK';
+      } else if (cLoans.some((l) => l.status === 'PERHATIAN')) {
+        customerStatus = 'PERHATIAN';
+      } else if (activeLoans.length > 0) {
+        customerStatus = 'LANCAR';
+      } else {
+        customerStatus = 'LUNAS';
       }
 
-      return {
-        ...c,
-        totalLoans: custLoans.length,
-        activeLoansCount: activeCustLoans.length,
-        totalSisa,
-        smoothness,
-      };
+      map.set(c.id, {
+        totalPiutang,
+        totalTerbayar,
+        totalSisaPiutang,
+        activeLoansCount: activeLoans.length,
+        customerStatus,
+        customerLoans: cLoans,
+        customerPayments: cPayments,
+      });
     });
-  }, [customers, loans]);
+
+    return map;
+  }, [customers, loans, payments]);
 
   // Filtered customer list
   const filteredCustomers = useMemo(() => {
-    if (!customerSearch.trim()) return enrichedCustomers;
-    const q = customerSearch.toLowerCase();
-    return enrichedCustomers.filter(
-      (c) =>
+    const q = searchQuery.toLowerCase().trim();
+    return customers.filter((c) => {
+      const summary = customerSummaries.get(c.id);
+      const matchesSearch =
+        !q ||
         c.fullName.toLowerCase().includes(q) ||
         c.id.toLowerCase().includes(q) ||
         c.phone.includes(q) ||
-        c.address.toLowerCase().includes(q)
-    );
-  }, [enrichedCustomers, customerSearch]);
+        (c.address && c.address.toLowerCase().includes(q));
 
-  // Filtered loan list
-  const filteredLoans = useMemo(() => {
-    return loans.filter((l) => {
-      const matchSearch =
-        !loanSearch.trim() ||
-        l.loanTitle.toLowerCase().includes(loanSearch.toLowerCase()) ||
-        l.customerName.toLowerCase().includes(loanSearch.toLowerCase()) ||
-        l.id.toLowerCase().includes(loanSearch.toLowerCase()) ||
-        (l.itemDescription && l.itemDescription.toLowerCase().includes(loanSearch.toLowerCase()));
+      if (!matchesSearch) return false;
 
-      const matchStatus =
-        loanStatusFilter === 'ALL' || l.status === loanStatusFilter;
+      if (statusFilter === 'ALL') return true;
+      if (statusFilter === 'LANCAR') return summary?.customerStatus === 'LANCAR';
+      if (statusFilter === 'MENUNGGAK')
+        return summary?.customerStatus === 'MENUNGGAK' || summary?.customerStatus === 'PERHATIAN';
+      if (statusFilter === 'LUNAS')
+        return summary?.customerStatus === 'LUNAS' || summary?.customerStatus === 'BEBAS_TAGIHAN';
 
-      return matchSearch && matchStatus;
+      return true;
     });
-  }, [loans, loanSearch, loanStatusFilter]);
+  }, [customers, searchQuery, statusFilter, customerSummaries]);
 
-  // Filtered payment list
-  const filteredPayments = useMemo(() => {
-    if (!paymentSearch.trim()) return payments;
-    const q = paymentSearch.toLowerCase();
-    return payments.filter(
-      (p) =>
-        p.invoiceNo.toLowerCase().includes(q) ||
-        p.customerName.toLowerCase().includes(q) ||
-        p.loanTitle.toLowerCase().includes(q) ||
-        p.customerId.toLowerCase().includes(q)
-    );
-  }, [payments, paymentSearch]);
-
-  // 1. Langsung Backup ke Perangkat Lokal (.json) dengan catatan tanggal & waktu
+  // 1. Langsung Backup ke Perangkat Lokal (.json)
   const handleDirectBackupLocal = () => {
     try {
       const now = new Date();
-      const backupDateIso = now.toISOString();
-      const backupDateFormatted = formatDateIndo(backupDateIso);
-      const note = `Cadangan Database Amar Bank Lokal (${backupDateFormatted})`;
-
+      const backupDateFormatted = formatDateIndo(now.toISOString());
       backupDatabaseJSON({
         customers,
         loans,
         payments,
+        debts,
+        topupRecords,
         systemSettings,
-        exportedAt: backupDateIso,
-        version: '2.0-local',
-        backupNote: note,
+        exportedAt: now.toISOString(),
+        version: '2.1-amar-neraca',
+        backupNote: `Cadangan Offline Amar Bank (Neraca, Hutang & Topup) - ${backupDateFormatted}`,
       });
-
       setSyncFeedback({
         type: 'success',
-        message: `Database berhasil diunduh ke perangkat lokal Anda! (${backupDateFormatted})`,
+        message: `Database berhasil diunduh ke file .json lokal! Simpan file ini di penyimpanan aman Anda.`,
       });
       setTimeout(() => setSyncFeedback(null), 5000);
     } catch (err: any) {
@@ -288,7 +332,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
     e.target.value = '';
   };
 
-  // 3. Tombol UPLOAD: Mengirim seluruh database aktif ke Firebase Firestore & selaraskan aplikasi
+  // 3. Tombol UPLOAD: Mengirim seluruh database aktif ke Firebase Firestore
   const handleUploadToFirebase = async () => {
     setIsUploadingToFirebase(true);
     setSyncFeedback(null);
@@ -302,6 +346,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
           customers,
           loans,
           payments,
+          debts,
+          topupRecords,
           systemSettings,
           admins: [currentAdmin],
         },
@@ -309,17 +355,18 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
         currentAdmin.fullName || 'Admin Amar Bank'
       );
 
-      // Selaraskan data aplikasi
       onRestoreData({
         customers,
         loans,
         payments,
+        debts,
+        topupRecords,
         systemSettings,
       });
 
       setSyncFeedback({
         type: 'success',
-        message: `Berhasil Upload ke Firebase Cloud! Seluruh data aplikasi telah tersinkronisasi. (${formatDateIndo(result.timestamp)})`,
+        message: `Berhasil Upload ke Firebase Cloud! Seluruh data Neraca, Hutang, Topup & Piutang telah tersinkronisasi. (${formatDateIndo(result.timestamp)})`,
       });
       setTimeout(() => setSyncFeedback(null), 6000);
     } catch (err: any) {
@@ -333,7 +380,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
     }
   };
 
-  // 4. Tombol UPDATE: Mendownload data terbaru dari Firebase Firestore & memperbarui data aplikasi
+  // 4. Tombol UPDATE: Mendownload data terbaru dari Firebase Firestore
   const handleUpdateFromFirebase = async () => {
     setIsUpdatingFromFirebase(true);
     setSyncFeedback(null);
@@ -351,12 +398,14 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
         customers: cloudData.customers || [],
         loans: cloudData.loans || [],
         payments: cloudData.payments || [],
+        debts: cloudData.debts || [],
+        topupRecords: cloudData.topupRecords || [],
         systemSettings: cloudData.systemSettings,
       });
 
       setSyncFeedback({
         type: 'success',
-        message: `Berhasil Update data dari Firebase Cloud! (${cloudData.customers?.length || 0} Nasabah, ${cloudData.loans?.length || 0} Akad, ${cloudData.payments?.length || 0} Angsuran diperbarui)`,
+        message: `Berhasil Update data dari Firebase Cloud! (${cloudData.customers?.length || 0} Nasabah, ${cloudData.loans?.length || 0} Kredit, ${cloudData.debts?.length || 0} Hutang, ${cloudData.topupRecords?.length || 0} Topup)`,
       });
       setTimeout(() => setSyncFeedback(null), 6000);
     } catch (err: any) {
@@ -412,9 +461,55 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
     }
   };
 
+  // Aksi Cepat Bayar untuk Nasabah Tertentu
+  const handleQuickPay = (customer: Customer, summary: CustomerSummary) => {
+    const unpaidLoan = summary.customerLoans.find((l) => l.status !== 'LUNAS');
+    if (unpaidLoan) {
+      setPreselectedLoanId(unpaidLoan.id);
+      setIsPaymentModalOpen(true);
+    } else if (summary.customerLoans.length > 0) {
+      setPreselectedLoanId(summary.customerLoans[0].id);
+      setIsPaymentModalOpen(true);
+    } else {
+      setSyncFeedback({
+        type: 'info',
+        message: `Nasabah "${customer.fullName}" belum memiliki akad pinjaman. Silakan buat akad kredit terlebih dahulu.`,
+      });
+      setTimeout(() => setSyncFeedback(null), 4000);
+    }
+  };
+
+  // Aksi Cepat Tambah Akad untuk Nasabah Tertentu
+  const handleQuickAddLoan = (customer: Customer) => {
+    setPreselectedCustomerId(customer.id);
+    setIsLoanModalOpen(true);
+  };
+
+  // Aksi Kirim Tagihan WhatsApp
+  const handleWhatsAppBilling = (customer: Customer, summary: CustomerSummary) => {
+    const unpaidLoan = summary.customerLoans.find((l) => l.status !== 'LUNAS');
+    const todayStr = formatDateIndo(new Date().toISOString());
+    const message = `Halo Bapak/Ibu ${customer.fullName},
+
+Kami dari *Amar Bank* (${systemSettings.cityName}) ingin menyampaikan informasi status pembiayaan Anda per tanggal ${todayStr}:
+- ID Nasabah    : *${customer.id}*
+- Total Piutang : *${formatRupiah(summary.totalPiutang)}*
+- Sudah Dibayar : *${formatRupiah(summary.totalTerbayar)}*
+- Sisa Piutang  : *${formatRupiah(summary.totalSisaPiutang)}*
+- Status Kredit : *${summary.customerStatus}*${
+      unpaidLoan
+        ? `\n- Tagihan Terdekat: *${formatRupiah(unpaidLoan.installmentPerPeriod)}* (Jatuh Tempo: *${formatDateIndo(unpaidLoan.nextDueDate)}*)`
+        : ''
+    }
+
+Mohon konfirmasi jika ada yang perlu dikoordinasikan.
+Terima kasih.`;
+
+    window.open(createWhatsAppLink(customer.phone, message), '_blank');
+  };
+
   return (
-    <div className="min-h-screen bg-slate-100 pb-24 text-slate-800">
-      
+    <div className="min-h-screen bg-slate-100 pb-28 text-slate-800">
       {/* Hidden File Input for Database Restore */}
       <input
         ref={fileInputRef}
@@ -424,7 +519,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
         onChange={handleRestoreFile}
       />
 
-      {/* 1. TOP MOBILE APP BAR */}
+      {/* 1. TOP MOBILE & DESKTOP APP BAR */}
       <header className="sticky top-0 z-30 bg-white border-b border-slate-200 px-4 py-3 shadow-xs">
         <div className="max-w-4xl mx-auto flex items-center justify-between">
           <AmarBankLogo size="sm" showText={true} />
@@ -460,6 +555,23 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
               <span className="hidden xs:inline sm:inline">Update</span>
             </button>
 
+            {/* Tombol Google Drive (Backup & Restore ke Google Drive) */}
+            <button
+              onClick={() => setIsGoogleDriveModalOpen(true)}
+              title="Cadangkan atau Pulihkan Database dengan Google Drive"
+              className="py-1.5 px-2.5 sm:px-3 rounded-xl bg-white hover:bg-slate-100 border border-slate-300 text-slate-800 font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer active:scale-95"
+            >
+              <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 87.3 78">
+                <path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8h-27.5c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/>
+                <path d="m43.65 25-13.75-23.8c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44c-.8 1.4-1.2 2.95-1.2 4.5h27.5z" fill="#00ac47"/>
+                <path d="m73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5h-27.502l5.852 11.5z" fill="#ea4335"/>
+                <path d="m43.65 25 13.75-23.8c-1.35-.8-2.9-1.2-4.5-1.2h-18.5c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d"/>
+                <path d="m59.8 53h-32.3l-13.75 23.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z" fill="#2684fc"/>
+                <path d="m73.4 26.5-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3l-13.75 23.8 16.15 28h27.45c0-1.55-.4-3.1-1.2-4.5z" fill="#ffba00"/>
+              </svg>
+              <span className="hidden xs:inline sm:inline">Drive</span>
+            </button>
+
             {/* Tombol Cetak PDF di Atas Jendela Admin */}
             <button
               onClick={() => setIsReportModalOpen(true)}
@@ -490,15 +602,12 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                 <span className="text-xs font-bold text-slate-900 block leading-tight">
                   {currentAdmin.fullName}
                 </span>
-                <span className="text-[10px] text-blue-900 font-semibold">
-                  Administrator
-                </span>
+                <span className="text-[10px] text-slate-400 block">Kota {systemSettings.cityName}</span>
               </div>
-
               <button
                 onClick={onLogout}
+                className="p-2 rounded-xl bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-600 transition-colors cursor-pointer"
                 title="Keluar dari Portal Admin"
-                className="p-2 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
               >
                 <LogOut className="w-4 h-4" />
               </button>
@@ -507,787 +616,535 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
         </div>
       </header>
 
-      {/* 2. MAIN APP CONTENT CONTAINER */}
-      <main className="max-w-4xl mx-auto p-4 md:p-6 space-y-5">
-        {/* Sync Feedback Toast / Banner */}
+      {/* 2. MAIN CONTENT AREA */}
+      <main className="max-w-4xl mx-auto px-4 pt-4 space-y-4">
+        {/* Realtime Feedback Banner (Upload / Update / Restore) */}
         {syncFeedback && (
           <div
-            className={`p-3.5 rounded-2xl text-xs flex items-center justify-between gap-3 shadow-md border animate-in fade-in slide-in-from-top duration-200 ${
+            className={`p-3 rounded-2xl text-xs font-semibold flex items-center justify-between gap-2 shadow-xs transition-all ${
               syncFeedback.type === 'success'
-                ? 'bg-emerald-600 text-white border-emerald-500'
+                ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
                 : syncFeedback.type === 'error'
-                ? 'bg-rose-600 text-white border-rose-500'
-                : 'bg-blue-600 text-white border-blue-500'
+                ? 'bg-rose-50 text-rose-800 border border-rose-200'
+                : 'bg-blue-50 text-blue-900 border border-blue-200'
             }`}
           >
             <div className="flex items-center gap-2">
-              {syncFeedback.type === 'success' ? (
-                <CheckCircle2 className="w-4 h-4 shrink-0 text-white" />
-              ) : syncFeedback.type === 'error' ? (
-                <AlertTriangle className="w-4 h-4 shrink-0 text-white" />
-              ) : (
-                <Cloud className="w-4 h-4 shrink-0 text-white" />
-              )}
-              <span className="font-semibold">{syncFeedback.message}</span>
+              {syncFeedback.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />}
+              {syncFeedback.type === 'error' && <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />}
+              {syncFeedback.type === 'info' && <Cloud className="w-4 h-4 text-blue-600 shrink-0" />}
+              <span>{syncFeedback.message}</span>
             </div>
             <button
               onClick={() => setSyncFeedback(null)}
-              className="text-white/80 hover:text-white text-xs font-bold px-2 py-0.5 rounded cursor-pointer"
+              className="text-slate-400 hover:text-slate-700 text-xs px-2 py-0.5 rounded cursor-pointer"
             >
               ✕
             </button>
           </div>
         )}
-        
+
         {/* ========================================================= */}
-        {/* TAB 1: BERANDA (OVERVIEW DASHBOARD) */}
+        {/* TAMPILAN 1: NERACA KEUANGAN (DEFAULT SETELAH ADMIN LOGIN) */}
         {/* ========================================================= */}
-        {activeTab === 'BERANDA' && (
+        {activeView === 'NERACA' && (
+          <NeracaKeuanganView
+            systemSettings={systemSettings}
+            currentAdmin={currentAdmin}
+            customers={customers}
+            loans={loans}
+            payments={payments}
+            debts={debts}
+            topupRecords={topupRecords}
+            onNavigateToTab={(tab) => setActiveView(tab)}
+            onOpenGoogleDrive={() => setIsGoogleDriveModalOpen(true)}
+          />
+        )}
+
+        {/* ========================================================= */}
+        {/* TAMPILAN 2: MENU KREDIT & PIUTANG (YANG SUDAH JADI) */}
+        {/* ========================================================= */}
+        {activeView === 'KREDIT' && (
           <div className="space-y-4">
-            
-            {/* Welcome Banner */}
-            <div className="p-5 bg-gradient-to-r from-blue-950 via-blue-900 to-blue-800 rounded-3xl text-white shadow-xl shadow-blue-950/15 relative overflow-hidden">
-              <div className="relative z-10">
-                <div className="flex items-center justify-between pb-1">
-                  <span className="text-[11px] font-semibold text-blue-200 uppercase tracking-wider">
-                    Dashboard Pengelola Kredit
-                  </span>
-                  <span className="text-[11px] bg-white/15 px-2.5 py-0.5 rounded-full font-medium text-blue-100">
-                    Kota: {systemSettings.cityName}
-                  </span>
-                </div>
-                <h1 className="text-lg md:text-xl font-black mt-0.5 tracking-tight">
-                  Selamat Datang, {currentAdmin.fullName}
-                </h1>
-                <p className="text-xs text-blue-200/90 mt-1 max-w-md">
-                  Kelola pencatatan kredit, piutang nasabah, angsuran berjalan, dan ekspor laporan resmi.
+            {/* Ringkasan Keuangan Global Beranda (Simple & Slim Overview) */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="p-3 bg-white rounded-2xl border border-slate-200/90 shadow-xs">
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tight block">
+                  Total Plafon Piutang
+                </span>
+                <p className="font-mono text-sm sm:text-base font-black text-slate-900 mt-0.5">
+                  {formatRupiah(financialStats.totalPiutang)}
                 </p>
+                <span className="text-[10px] text-slate-400 mt-0.5 block">{loans.length} Total Akad</span>
+              </div>
 
-                {/* Quick Action Buttons */}
-                <div className="mt-4 flex flex-wrap gap-2 pt-1">
-                  <button
-                    onClick={() => {
-                      setPreselectedCustomerId(undefined);
-                      setIsLoanModalOpen(true);
-                    }}
-                    className="py-2.5 px-3.5 rounded-xl bg-white text-blue-950 font-bold text-xs hover:bg-blue-50 transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <Plus className="w-4 h-4 text-blue-900" />
-                    <span>Catat Kredit Baru</span>
-                  </button>
+              <div className="p-3 bg-white rounded-2xl border border-slate-200/90 shadow-xs">
+                <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-tight block">
+                  Total Terbayar
+                </span>
+                <p className="font-mono text-sm sm:text-base font-black text-emerald-700 mt-0.5">
+                  {formatRupiah(financialStats.totalTerkumpul)}
+                </p>
+                <span className="text-[10px] text-emerald-600/80 mt-0.5 block">{payments.length} Pembayaran</span>
+              </div>
 
+              <div className="p-3 bg-white rounded-2xl border border-slate-200/90 shadow-xs">
+                <span className="text-[10px] font-bold text-blue-900 uppercase tracking-tight block">
+                  Sisa Piutang Berjalan
+                </span>
+                <p className="font-mono text-sm sm:text-base font-black text-blue-950 mt-0.5">
+                  {formatRupiah(financialStats.totalSisaPiutang)}
+                </p>
+                <span className="text-[10px] text-blue-700 mt-0.5 block">
+                  {financialStats.activeLoansCount} Akad Aktif
+                </span>
+              </div>
+
+              <div className="p-3 bg-white rounded-2xl border border-slate-200/90 shadow-xs">
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tight block">
+                  Total Nasabah
+                </span>
+                <p className="font-mono text-sm sm:text-base font-black text-slate-900 mt-0.5">
+                  {customers.length}
+                </p>
+                <span className="text-[10px] text-rose-600 font-semibold mt-0.5 block">
+                  {financialStats.overdueCount > 0 ? `${financialStats.overdueCount} Menunggak` : 'Semua Tertib'}
+                </span>
+              </div>
+            </div>
+
+            {/* Pencarian, Filter Status & Tombol Tambah Nasabah */}
+            <div className="p-3 bg-white rounded-2xl border border-slate-200/90 shadow-xs space-y-2.5">
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2">
+                {/* Search Bar Input */}
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    placeholder="Cari nama nasabah, ID (CUST-1001), atau no HP..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full pl-9 pr-3.5 py-2 rounded-xl bg-slate-50 border border-slate-200 focus:border-blue-900 focus:bg-white text-xs font-semibold text-slate-900 outline-none transition-all"
+                  />
+                  {searchQuery && (
+                    <button
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                {/* Tombol Tambah Nasabah & Tambah Akad */}
+                <div className="flex items-center gap-1.5 shrink-0">
                   <button
                     onClick={() => {
                       setCustomerToEdit(null);
                       setIsCustomerModalOpen(true);
                     }}
-                    className="py-2.5 px-3.5 rounded-xl bg-blue-800/80 hover:bg-blue-800 text-white font-semibold text-xs border border-white/20 transition-colors flex items-center gap-1.5 cursor-pointer"
+                    className="py-2 px-3 rounded-xl bg-blue-900 hover:bg-blue-800 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
                   >
-                    <Users className="w-4 h-4" />
-                    <span>Tambah Nasabah</span>
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Nasabah Baru</span>
                   </button>
 
                   <button
                     onClick={() => {
-                      setPreselectedLoanId(undefined);
-                      setIsPaymentModalOpen(true);
+                      setPreselectedCustomerId(undefined);
+                      setIsLoanModalOpen(true);
                     }}
-                    className="py-2.5 px-3.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                    className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
                   >
-                    <Banknote className="w-4 h-4" />
-                    <span>Terima Pembayaran</span>
+                    <CreditCard className="w-3.5 h-3.5 text-cyan-300" />
+                    <span className="hidden xs:inline">Catat Akad</span>
                   </button>
                 </div>
               </div>
-            </div>
 
-            {/* Financial Metrics Cards (3-Column / 2-Column Responsive) */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              {/* Card 1: Total Piutang */}
-              <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs">
-                <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
-                  Total Plafon Piutang
-                </span>
-                <p className="font-mono text-base md:text-lg font-black text-slate-900 mt-1">
-                  {formatRupiah(financialStats.totalPiutang)}
-                </p>
-                <span className="text-[10px] text-slate-400 mt-0.5 block">
-                  {loans.length} Total Akad Kredit
-                </span>
-              </div>
-
-              {/* Card 2: Terkumpul */}
-              <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs">
-                <span className="text-[11px] font-semibold text-emerald-800 uppercase tracking-wider block">
-                  Total Angsuran Masuk
-                </span>
-                <p className="font-mono text-base md:text-lg font-black text-emerald-700 mt-1">
-                  {formatRupiah(financialStats.totalTerkumpul)}
-                </p>
-                <span className="text-[10px] text-emerald-800/80 mt-0.5 block">
-                  {payments.length} Kwitansi Diterbitkan
-                </span>
-              </div>
-
-              {/* Card 3: Sisa Piutang Berjalan */}
-              <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs">
-                <span className="text-[11px] font-semibold text-blue-900 uppercase tracking-wider block">
-                  Sisa Piutang Aktif
-                </span>
-                <p className="font-mono text-base md:text-lg font-black text-blue-950 mt-1">
-                  {formatRupiah(financialStats.totalSisaPiutang)}
-                </p>
-                <span className="text-[10px] text-blue-700 mt-0.5 block">
-                  {financialStats.activeLoansCount} Akad Berjalan
-                </span>
-              </div>
-
-              {/* Card 4: Total Nasabah */}
-              <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs">
-                <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
-                  Total Nasabah
-                </span>
-                <p className="font-mono text-base md:text-lg font-black text-slate-900 mt-1">
-                  {customers.length} Orang
-                </p>
-                <div className="flex items-center gap-1.5 mt-0.5 text-[10px]">
-                  {financialStats.attentionCount > 0 && (
-                    <span className="text-amber-800 font-bold">
-                      {financialStats.attentionCount} Dekat Tempo
-                    </span>
-                  )}
-                  {financialStats.overdueCount > 0 && (
-                    <span className="text-rose-700 font-bold">
-                      · {financialStats.overdueCount} Menunggak
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Quick Alert Bar if any due in <= 3 days */}
-            {financialStats.attentionCount > 0 && (
-              <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0" />
-                  <span className="text-amber-900 font-medium">
-                    Ada {financialStats.attentionCount} tagihan pinjaman yang jatuh tempo dalam kurun ≤ 3 hari.
-                  </span>
-                </div>
-                <button
-                  onClick={() => setIsNotificationModalOpen(true)}
-                  className="px-2.5 py-1 rounded-lg bg-amber-200 hover:bg-amber-300 text-amber-950 font-bold text-[11px] transition-colors cursor-pointer shrink-0"
-                >
-                  Lihat Notifikasi
-                </button>
-              </div>
-            )}
-
-            {/* Dua Kolom Beranda: Akad Terbaru & Riwayat Pembayaran Terbaru */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              
-              {/* Kolom 1: Akad Kredit Aktif Terbaru */}
-              <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs space-y-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
-                    <CreditCard className="w-4 h-4 text-blue-900" />
-                    <span>Akad Kredit Terbaru</span>
-                  </h3>
+              {/* Status Filter Tabs */}
+              <div className="flex items-center gap-1 overflow-x-auto pb-0.5 text-xs">
+                {(
+                  [
+                    { id: 'ALL', label: `Semua (${customers.length})` },
+                    { id: 'LANCAR', label: 'Lancar' },
+                    { id: 'MENUNGGAK', label: 'Menunggak' },
+                    { id: 'LUNAS', label: 'Lunas / Bebas' },
+                  ] as const
+                ).map((tab) => (
                   <button
-                    onClick={() => setActiveTab('KREDIT')}
-                    className="text-xs text-blue-900 font-semibold hover:underline cursor-pointer"
+                    key={tab.id}
+                    onClick={() => setStatusFilter(tab.id)}
+                    className={`py-1 px-2.5 rounded-lg font-semibold text-[11px] transition-all cursor-pointer ${
+                      statusFilter === tab.id
+                        ? 'bg-blue-900 text-white shadow-xs'
+                        : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+                    }`}
                   >
-                    Lihat Semua
+                    {tab.label}
                   </button>
-                </div>
-
-                <div className="space-y-2">
-                  {loans.slice(0, 4).map((loan) => (
-                    <div
-                      key={loan.id}
-                      className="p-3 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-between text-xs"
-                    >
-                      <div className="min-w-0 pr-2">
-                        <p className="font-bold text-slate-900 truncate">
-                          {loan.customerName}
-                        </p>
-                        <p className="text-[11px] text-slate-500 truncate">
-                          {loan.loanTitle}
-                        </p>
-                        <span className="font-mono text-[10px] text-slate-400">
-                          Sisa: {formatRupiah(loan.remainingBalance)}
-                        </span>
-                      </div>
-
-                      <div className="text-right shrink-0">
-                        <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
-                          loan.status === 'LUNAS' ? 'bg-emerald-100 text-emerald-800' :
-                          loan.status === 'PERHATIAN' ? 'bg-amber-100 text-amber-800' :
-                          loan.status === 'MENUNGGAK' ? 'bg-rose-100 text-rose-800' :
-                          'bg-blue-100 text-blue-800'
-                        }`}>
-                          {loan.status}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                ))}
               </div>
-
-              {/* Kolom 2: Transaksi Pembayaran Masuk Terbaru */}
-              <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs space-y-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
-                    <Receipt className="w-4 h-4 text-emerald-600" />
-                    <span>Pembayaran Masuk Terbaru</span>
-                  </h3>
-                  <button
-                    onClick={() => setActiveTab('PEMBAYARAN')}
-                    className="text-xs text-blue-900 font-semibold hover:underline cursor-pointer"
-                  >
-                    Lihat Semua
-                  </button>
-                </div>
-
-                <div className="space-y-2">
-                  {payments.slice(0, 4).map((pay) => (
-                    <div
-                      key={pay.id}
-                      onClick={() => setSelectedReceipt(pay)}
-                      className="p-3 rounded-xl bg-slate-50 hover:bg-blue-50/50 border border-slate-100 flex items-center justify-between text-xs cursor-pointer transition-colors"
-                    >
-                      <div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-mono text-xs font-bold text-blue-900">
-                            {pay.invoiceNo}
-                          </span>
-                        </div>
-                        <p className="font-medium text-slate-800 text-[11px] mt-0.5">
-                          {pay.customerName}
-                        </p>
-                      </div>
-
-                      <div className="text-right">
-                        <p className="font-mono font-extrabold text-emerald-700">
-                          {formatRupiah(pay.amount)}
-                        </p>
-                        <p className="text-[10px] text-slate-400">
-                          {formatDateIndo(pay.date)}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
             </div>
 
-          </div>
-        )}
-
-        {/* ========================================================= */}
-        {/* TAB 2: MANAJEMEN NASABAH & PELANGGAN */}
-        {/* ========================================================= */}
-        {activeTab === 'NASABAH' && (
-          <div className="space-y-4">
-            
-            {/* Header and Search */}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-              <div>
-                <h2 className="text-base font-bold text-slate-900 flex items-center gap-1.5">
-                  <Users className="w-5 h-5 text-blue-900" />
-                  <span>Daftar Nasabah Terpusat ({customers.length})</span>
-                </h2>
-                <p className="text-xs text-slate-500">
-                  Kelola data nasabah, ID unik login, dan komunikasi WhatsApp langsung
-                </p>
-              </div>
-
-              <button
-                onClick={() => {
-                  setCustomerToEdit(null);
-                  setIsCustomerModalOpen(true);
-                }}
-                className="py-2.5 px-4 rounded-xl bg-blue-900 hover:bg-blue-800 text-white font-semibold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-colors cursor-pointer"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Pendaftaran Nasabah Baru</span>
-              </button>
-            </div>
-
-            {/* Search Input */}
-            <div className="relative">
-              <Search className="w-4 h-4 absolute left-3.5 top-3 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Cari berdasarkan nama nasabah, ID (CUST-...), atau nomor WhatsApp..."
-                value={customerSearch}
-                onChange={(e) => setCustomerSearch(e.target.value)}
-                className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 outline-none focus:border-blue-700 shadow-xs"
-              />
-            </div>
-
-            {/* Customer Cards List */}
+            {/* DAFTAR NASABAH TERPADU (SETIAP NASABAH DIBATASI KOTAK/GARIS BAYANG PEMBATAS) */}
             <div className="space-y-3">
               {filteredCustomers.length === 0 ? (
-                <div className="p-8 bg-white rounded-2xl border border-slate-200 text-center text-slate-400">
-                  <Users className="w-8 h-8 mx-auto text-slate-300 mb-2" />
-                  <p className="text-xs font-medium">Tidak ada nasabah yang sesuai dengan pencarian.</p>
+                <div className="p-8 bg-white rounded-3xl border border-dashed border-slate-300 text-center space-y-3">
+                  <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
+                    <Users className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-800">Tidak ada nasabah yang ditemukan</h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {searchQuery
+                        ? `Tidak ada data cocok dengan kata kunci "${searchQuery}".`
+                        : 'Belum ada nasabah terdaftar di sistem.'}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setCustomerToEdit(null);
+                      setIsCustomerModalOpen(true);
+                    }}
+                    className="py-2 px-4 rounded-xl bg-blue-900 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer hover:bg-blue-800 transition-colors"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Daftarkan Nasabah Pertama</span>
+                  </button>
                 </div>
               ) : (
                 filteredCustomers.map((c) => {
-                  const smoothnessBadge =
-                    c.smoothness === 'LUNAS' ? 'bg-emerald-100 text-emerald-800' :
-                    c.smoothness === 'PERHATIAN' ? 'bg-amber-100 text-amber-800' :
-                    c.smoothness === 'MENUNGGAK' ? 'bg-rose-100 text-rose-800' :
-                    'bg-blue-100 text-blue-800';
+                  const summary = customerSummaries.get(c.id) || {
+                    totalPiutang: 0,
+                    totalTerbayar: 0,
+                    totalSisaPiutang: 0,
+                    activeLoansCount: 0,
+                    customerStatus: 'BEBAS_TAGIHAN' as const,
+                    customerLoans: [],
+                    customerPayments: [],
+                  };
+                  const isExpanded = !!expandedCustomers[c.id];
 
-                  const custLoans = loans.filter((l) => l.customerId === c.id);
-                  const totalPinjaman = custLoans.reduce((sum, l) => sum + l.totalBill, 0);
-                  const sisaTagihanTotal = custLoans.reduce((sum, l) => sum + l.remainingBalance, 0);
-                  const tagihanHarusDibayar = custLoans
-                    .filter((l) => l.remainingBalance > 0)
-                    .reduce((sum, l) => sum + Math.min(l.installmentPerPeriod, l.remainingBalance), 0);
+                  // Status badge styling
+                  let badgeClass = 'bg-slate-100 text-slate-700 border-slate-200';
+                  let badgeText = 'Bebas Tagihan';
 
-                  const detailAkadText = custLoans
-                    .filter((l) => l.remainingBalance > 0)
-                    .map((l, i) => `  ${i + 1}. *${l.loanTitle}*
-     • Tagihan Saat Ini : ${formatRupiah(Math.min(l.installmentPerPeriod, l.remainingBalance))}
-     • Sisa Tagihan : ${formatRupiah(l.remainingBalance)} (Jatuh Tempo: ${formatDateIndo(l.nextDueDate)})`)
-                    .join('\n');
-
-                  const greetingMessage = `Halo Bapak/Ibu ${c.fullName},
-Kami dari Amar Bank ingin menginformasikan detail akun pembiayaan kredit Anda (ID: *${c.id}*):
-
-📊 *INFORMASI TAGIHAN & PINJAMAN:*
-• Total Pinjaman (Plafon) : *${formatRupiah(totalPinjaman)}*
-• Tagihan yang Harus Dibayar : *${formatRupiah(tagihanHarusDibayar)}*
-• Sisa Tagihan Total      : *${formatRupiah(sisaTagihanTotal)}*
-
-${custLoans.filter(l => l.remainingBalance > 0).length > 0 ? `📋 *RINCIAN AKAD BERJALAN:*\n${detailAkadText}\n\n` : `Status: Seluruh tagihan pembiayaan telah LUNAS.\n\n`}Pembayaran dapat dilakukan melalui Transfer Bank, QRIS, atau kasir Amar Bank.
-Apakah ada yang dapat kami bantu mengenai informasi pembiayaan Anda? Terima kasih.`;
-
-                  const waChatLink = createWhatsAppLink(c.phone, greetingMessage);
+                  if (summary.customerStatus === 'MENUNGGAK') {
+                    badgeClass = 'bg-rose-50 text-rose-700 border-rose-200 animate-pulse';
+                    badgeText = 'Menunggak';
+                  } else if (summary.customerStatus === 'PERHATIAN') {
+                    badgeClass = 'bg-amber-50 text-amber-800 border-amber-200';
+                    badgeText = 'Perhatian';
+                  } else if (summary.customerStatus === 'LANCAR') {
+                    badgeClass = 'bg-emerald-50 text-emerald-800 border-emerald-200';
+                    badgeText = 'Lancar';
+                  } else if (summary.customerStatus === 'LUNAS') {
+                    badgeClass = 'bg-blue-50 text-blue-900 border-blue-200';
+                    badgeText = 'Lunas';
+                  }
 
                   return (
                     <div
                       key={c.id}
-                      className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs hover:border-blue-300 transition-all space-y-3"
+                      className="p-4 bg-white rounded-2xl border border-slate-200/90 shadow-xs hover:shadow-sm hover:border-blue-300 transition-all space-y-3"
                     >
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-xs font-bold text-blue-900 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
-                              {c.id}
-                            </span>
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${smoothnessBadge}`}>
-                              Status: {c.smoothness}
-                            </span>
+                      {/* Baris Atas: Info Identitas Nasabah & Label Status */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-900 to-indigo-950 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">
+                            {c.fullName.slice(0, 1).toUpperCase()}
                           </div>
-                          <h3 className="text-sm font-bold text-slate-900 mt-1">
-                            {c.fullName}
-                          </h3>
-                          <p className="text-xs text-slate-500 mt-0.5">
-                            {c.address}
-                          </p>
-                        </div>
-
-                        {/* Customer PIN Display (Protected View for Admin) */}
-                        <div className="text-right">
-                          <span className="text-[10px] text-slate-400 block">PIN Nasabah:</span>
-                          <span className="font-mono text-xs font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded">
-                            {c.pin}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Financial Metric Row */}
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2 border-t border-slate-100 text-xs">
-                        <div>
-                          <span className="text-slate-400 text-[11px]">Pinjaman Aktif:</span>
-                          <p className="font-semibold text-slate-800">
-                            {c.activeLoansCount} Akad Berjalan ({c.totalLoans} Total)
-                          </p>
-                        </div>
-                        <div>
-                          <span className="text-slate-400 text-[11px]">Total Sisa Piutang:</span>
-                          <p className="font-mono font-bold text-slate-900">
-                            {formatRupiah(c.totalSisa)}
-                          </p>
-                        </div>
-                        <div className="col-span-2 sm:col-span-1">
-                          <span className="text-slate-400 text-[11px]">Catatan:</span>
-                          <p className="text-slate-600 truncate text-[11px]">
-                            {c.notes || '-'}
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Action Buttons: WhatsApp & Edit */}
-                      <div className="flex items-center gap-2 pt-1 border-t border-slate-100">
-                        {/* WhatsApp Direct Chat Button */}
-                        <a
-                          href={waChatLink}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors shadow-xs"
-                        >
-                          <MessageCircle className="w-3.5 h-3.5" />
-                          <span>Hubungi WhatsApp</span>
-                        </a>
-
-                        {/* Tambah Kredit untuk nasabah ini */}
-                        <button
-                          onClick={() => {
-                            setPreselectedCustomerId(c.id);
-                            setIsLoanModalOpen(true);
-                          }}
-                          className="py-2 px-3 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-900 font-semibold text-xs border border-blue-200 transition-colors cursor-pointer"
-                        >
-                          + Akad Baru
-                        </button>
-
-                        {/* Edit Data */}
-                        <button
-                          onClick={() => {
-                            setCustomerToEdit(c);
-                            setIsCustomerModalOpen(true);
-                          }}
-                          className="py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-xs transition-colors cursor-pointer"
-                        >
-                          Ubah
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-
-          </div>
-        )}
-
-        {/* ========================================================= */}
-        {/* TAB 3: AKAD KREDIT & PIUTANG */}
-        {/* ========================================================= */}
-        {activeTab === 'KREDIT' && (
-          <div className="space-y-4">
-            
-            {/* Header and Add Button */}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-              <div>
-                <h2 className="text-base font-bold text-slate-900 flex items-center gap-1.5">
-                  <CreditCard className="w-5 h-5 text-blue-900" />
-                  <span>Daftar Akad Kredit ({loans.length})</span>
-                </h2>
-                <p className="text-xs text-slate-500">
-                  Kredit barang & pinjaman tunai dengan margin % dan tenor fleksibel
-                </p>
-              </div>
-
-              <button
-                onClick={() => {
-                  setPreselectedCustomerId(undefined);
-                  setIsLoanModalOpen(true);
-                }}
-                className="py-2.5 px-4 rounded-xl bg-blue-900 hover:bg-blue-800 text-white font-semibold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-colors cursor-pointer"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Pencatatan Akad Baru</span>
-              </button>
-            </div>
-
-            {/* Filter Pills */}
-            <div className="flex flex-wrap gap-1.5 text-xs">
-              {[
-                { id: 'ALL', label: 'Semua Status' },
-                { id: 'LANCAR', label: 'Lancar' },
-                { id: 'PERHATIAN', label: 'Dekat Tempo' },
-                { id: 'MENUNGGAK', label: 'Menunggak' },
-                { id: 'LUNAS', label: 'Lunas' },
-              ].map((item) => (
-                <button
-                  key={item.id}
-                  onClick={() => setLoanStatusFilter(item.id as any)}
-                  className={`py-1.5 px-3 rounded-lg font-medium transition-colors cursor-pointer ${
-                    loanStatusFilter === item.id
-                      ? 'bg-blue-900 text-white'
-                      : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
-                  }`}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Search Input */}
-            <div className="relative">
-              <Search className="w-4 h-4 absolute left-3.5 top-3 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Cari akad, nama nasabah, atau objek barang..."
-                value={loanSearch}
-                onChange={(e) => setLoanSearch(e.target.value)}
-                className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 outline-none focus:border-blue-700 shadow-xs"
-              />
-            </div>
-
-            {/* Loan Cards List */}
-            <div className="space-y-3">
-              {filteredLoans.length === 0 ? (
-                <div className="p-8 bg-white rounded-2xl border border-slate-200 text-center text-slate-400">
-                  <CreditCard className="w-8 h-8 mx-auto text-slate-300 mb-2" />
-                  <p className="text-xs font-medium">Tidak ada akad kredit yang ditemukan.</p>
-                </div>
-              ) : (
-                filteredLoans.map((loan) => {
-                  const isLunas = loan.status === 'LUNAS';
-                  const percentPaid = Math.round((loan.totalPaid / loan.totalBill) * 100);
-
-                  return (
-                    <div
-                      key={loan.id}
-                      className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs hover:border-blue-300 transition-all space-y-3"
-                    >
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-mono text-xs font-bold text-blue-900 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
-                              {loan.id}
-                            </span>
-                            <span className="text-[10px] font-semibold text-slate-500 uppercase">
-                              {loan.type === 'BARANG' ? 'Barang' : 'Tunai'} · Margin {loan.marginPercentage}%
-                            </span>
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h3 className="text-sm font-bold text-slate-900">{c.fullName}</h3>
+                              <span className="font-mono text-[10px] font-bold text-blue-900 bg-blue-50 px-2 py-0.5 rounded border border-blue-200/60">
+                                {c.id}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5 flex-wrap">
+                              <span>{c.phone}</span>
+                              {c.address && (
+                                <>
+                                  <span className="text-slate-300">•</span>
+                                  <span className="truncate max-w-[180px] sm:max-w-xs">{c.address}</span>
+                                </>
+                              )}
+                            </div>
                           </div>
-
-                          <h3 className="text-sm font-bold text-slate-900 mt-1">
-                            {loan.loanTitle}
-                          </h3>
-                          <p className="text-xs font-medium text-slate-600">
-                            Nasabah: {loan.customerName} ({loan.customerId})
-                          </p>
-                          {loan.itemDescription && (
-                            <p className="text-[11px] text-slate-500 mt-0.5">
-                              {loan.itemDescription}
-                            </p>
-                          )}
                         </div>
 
-                        <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
-                          isLunas ? 'bg-emerald-100 text-emerald-800' :
-                          loan.status === 'PERHATIAN' ? 'bg-amber-100 text-amber-900 animate-pulse' :
-                          loan.status === 'MENUNGGAK' ? 'bg-rose-100 text-rose-800' :
-                          'bg-blue-100 text-blue-800'
-                        }`}>
-                          {loan.status}
+                        {/* Label Pelanggan Lancar / Nunggak */}
+                        <span
+                          className={`text-[10px] font-bold tracking-wider px-2.5 py-1 rounded-full border shrink-0 ${badgeClass}`}
+                        >
+                          {badgeText}
                         </span>
                       </div>
 
-                      {/* Progress Bar */}
-                      <div>
-                        <div className="flex justify-between text-[11px] mb-1 font-medium text-slate-600">
-                          <span>Pelunasan ({percentPaid}%)</span>
-                          <span className="font-mono">
-                            {formatRupiah(loan.totalPaid)} / {formatRupiah(loan.totalBill)}
+                      {/* UTAMA: 3 KOTAK NOMINAL PIUTANG TOTAL, TERBAYAR, SISA PIUTANG */}
+                      <div className="grid grid-cols-3 gap-2 bg-slate-50 p-2.5 sm:p-3 rounded-xl border border-slate-200/80 text-center">
+                        {/* 1. Nominal Piutang Total */}
+                        <div>
+                          <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-tight block">
+                            Total Piutang
+                          </span>
+                          <span className="font-mono text-xs sm:text-sm font-extrabold text-slate-900 mt-0.5 block">
+                            {formatRupiah(summary.totalPiutang)}
                           </span>
                         </div>
-                        <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full transition-all duration-300 ${
-                              isLunas ? 'bg-emerald-500' : 'bg-blue-900'
+
+                        {/* 2. Terbayar */}
+                        <div className="border-x border-slate-200">
+                          <span className="text-[10px] font-semibold text-emerald-700 uppercase tracking-tight block">
+                            Terbayar
+                          </span>
+                          <span className="font-mono text-xs sm:text-sm font-extrabold text-emerald-700 mt-0.5 block">
+                            {formatRupiah(summary.totalTerbayar)}
+                          </span>
+                        </div>
+
+                        {/* 3. Sisa Piutang */}
+                        <div>
+                          <span className="text-[10px] font-semibold text-blue-900 uppercase tracking-tight block">
+                            Sisa Piutang
+                          </span>
+                          <span
+                            className={`font-mono text-xs sm:text-sm font-extrabold mt-0.5 block ${
+                              summary.totalSisaPiutang > 0 ? 'text-rose-600' : 'text-slate-800'
                             }`}
-                            style={{ width: `${percentPaid}%` }}
-                          />
+                          >
+                            {formatRupiah(summary.totalSisaPiutang)}
+                          </span>
                         </div>
                       </div>
 
-                      {/* Detail Metrics */}
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-100 text-xs">
-                        <div>
-                          <span className="text-[10px] text-slate-400">Pokok Bersih:</span>
-                          <p className="font-mono font-medium text-slate-800">{formatRupiah(loan.netPrincipal)}</p>
-                          {loan.dpAmount > 0 && (
-                            <span className="text-[9px] text-slate-400">DP: {formatRupiah(loan.dpAmount)}</span>
-                          )}
-                        </div>
-                        <div>
-                          <span className="text-[10px] text-slate-400">Margin ({loan.marginPercentage}%):</span>
-                          <p className="font-mono font-medium text-blue-900">+{formatRupiah(loan.marginAmount)}</p>
-                        </div>
-                        <div>
-                          <span className="text-[10px] text-slate-400">Angsuran / Periode:</span>
-                          <p className="font-mono font-bold text-slate-900">{formatRupiah(loan.installmentPerPeriod)}</p>
-                          <span className="text-[10px] text-slate-500">Tenor {loan.tenorCount} {loan.tenorUnit.toLowerCase()}</span>
-                        </div>
-                        <div>
-                          <span className="text-[10px] text-slate-400">Sisa Tagihan:</span>
-                          <p className="font-mono font-black text-slate-950">{formatRupiah(loan.remainingBalance)}</p>
-                          {!isLunas && (
-                            <span className="text-[10px] text-amber-700 font-medium block">
-                              Tempo: {formatDateIndo(loan.nextDueDate)}
-                            </span>
-                          )}
-                        </div>
-                      </div>
+                      {/* BARIS FUNGSI LAIN DIKEMAS DALAM BENTUK ICON-ICON */}
+                      <div className="flex items-center justify-between pt-1 gap-2 border-t border-slate-100">
+                        {/* Kiri: Tombol Aksi Utama Operasional */}
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {/* Icon 1: Bayar Angsuran (Catat Pembayaran) */}
+                          <button
+                            onClick={() => handleQuickPay(c, summary)}
+                            className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer active:scale-95"
+                            title="Catat Pembayaran Angsuran"
+                          >
+                            <Banknote className="w-3.5 h-3.5 text-emerald-100" />
+                            <span>Bayar</span>
+                          </button>
 
-                      {/* Action Bar */}
-                      <div className="flex items-center gap-2 pt-1 border-t border-slate-100">
-                        {!isLunas && (
+                          {/* Icon 2: Tambah Akad Kredit Baru */}
+                          <button
+                            onClick={() => handleQuickAddLoan(c)}
+                            className="py-1.5 px-3 rounded-xl bg-blue-900 hover:bg-blue-800 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer active:scale-95"
+                            title="Tambah Akad Kredit Baru untuk Nasabah ini"
+                          >
+                            <Plus className="w-3.5 h-3.5 text-cyan-300" />
+                            <span>Akad Baru</span>
+                          </button>
+
+                          {/* Icon 3: Kirim Rincian Tagihan WhatsApp */}
+                          <button
+                            onClick={() => handleWhatsAppBilling(c, summary)}
+                            className="p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer active:scale-95"
+                            title="Kirim Pesan Tagihan / Pengingat WhatsApp"
+                          >
+                            <MessageCircle className="w-3.5 h-3.5 text-emerald-600" />
+                            <span className="hidden sm:inline">WhatsApp</span>
+                          </button>
+
+                          {/* Icon 4: Edit Data Nasabah */}
                           <button
                             onClick={() => {
-                              setPreselectedLoanId(loan.id);
-                              setIsPaymentModalOpen(true);
+                              setCustomerToEdit(c);
+                              setIsCustomerModalOpen(true);
                             }}
-                            className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                            className="p-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
+                            title="Ubah Data Profil Nasabah"
                           >
-                            <Banknote className="w-3.5 h-3.5" />
-                            <span>Bayar Angsuran</span>
+                            <Pencil className="w-3.5 h-3.5" />
                           </button>
-                        )}
+                        </div>
 
-                        <a
-                          href={createWhatsAppLink(
-                            loan.customerPhone,
-                            `Halo Bapak/Ibu ${loan.customerName}, kami dari Amar Bank mengonfirmasi status akad ${loan.loanTitle} (Sisa: ${formatRupiah(loan.remainingBalance)}).`
-                          )}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-xs flex items-center gap-1 transition-colors"
-                        >
-                          <MessageCircle className="w-3.5 h-3.5 text-emerald-600" />
-                          <span>WhatsApp</span>
-                        </a>
+                        {/* Kanan: Icon Rincian / Riwayat Transaksi */}
+                        <div>
+                          <button
+                            onClick={() => toggleExpandCustomer(c.id)}
+                            className="py-1.5 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs flex items-center gap-1 transition-colors cursor-pointer"
+                            title="Lihat Rincian Akad & Riwayat Pembayaran"
+                          >
+                            <span className="text-[11px] hidden xs:inline">
+                              {summary.customerLoans.length} Akad
+                            </span>
+                            {isExpanded ? (
+                              <ChevronUp className="w-3.5 h-3.5 text-slate-600" />
+                            ) : (
+                              <ChevronDown className="w-3.5 h-3.5 text-slate-600" />
+                            )}
+                          </button>
+                        </div>
                       </div>
+
+                      {/* TAMPILAN RINCIAN YANG DAPAT DI-EXPAND (AKAD PINJAMAN & RIWAYAT KWITANSI) */}
+                      {isExpanded && (
+                        <div className="pt-2 border-t border-slate-100 space-y-3 animate-in fade-in duration-200">
+                          {/* Daftar Akad Nasabah */}
+                          <div>
+                            <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block mb-1.5">
+                              Rincian Akad Pinjaman ({summary.customerLoans.length}):
+                            </span>
+                            {summary.customerLoans.length === 0 ? (
+                              <p className="text-xs text-slate-400 italic">Belum ada akad pinjaman.</p>
+                            ) : (
+                              <div className="space-y-1.5">
+                                {summary.customerLoans.map((loan) => (
+                                  <div
+                                    key={loan.id}
+                                    className="p-2.5 bg-slate-50 rounded-xl border border-slate-200 text-xs flex items-center justify-between gap-2"
+                                  >
+                                    <div>
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="font-bold text-slate-900">{loan.loanTitle}</span>
+                                        <span className="font-mono text-[10px] text-slate-500">({loan.id})</span>
+                                        <span
+                                          className={`text-[9px] font-bold px-1.5 py-0.2 rounded-full border ${
+                                            loan.status === 'LANCAR'
+                                              ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                              : loan.status === 'MENUNGGAK'
+                                              ? 'bg-rose-100 text-rose-800 border-rose-200'
+                                              : loan.status === 'LUNAS'
+                                              ? 'bg-blue-100 text-blue-900 border-blue-200'
+                                              : 'bg-amber-100 text-amber-800 border-amber-200'
+                                          }`}
+                                        >
+                                          {loan.status}
+                                        </span>
+                                      </div>
+                                      <div className="text-[11px] text-slate-500 mt-0.5">
+                                        Plafon: {formatRupiah(loan.totalBill)} · Sisa:{' '}
+                                        <span className="font-bold text-slate-800">
+                                          {formatRupiah(loan.remainingBalance)}
+                                        </span>{' '}
+                                        · Angsuran: {formatRupiah(loan.installmentPerPeriod)}/{loan.tenorUnit.toLowerCase()}
+                                      </div>
+                                    </div>
+
+                                    <div className="flex items-center gap-1">
+                                      <button
+                                        onClick={() => setNewlyCreatedLoanReceipt(loan)}
+                                        className="py-1 px-2 rounded-lg bg-white hover:bg-slate-200 border border-slate-200 text-[11px] font-semibold text-slate-700 transition-colors cursor-pointer"
+                                        title="Cetak Lembar Akad"
+                                      >
+                                        Akad
+                                      </button>
+                                      {loan.status !== 'LUNAS' && (
+                                        <button
+                                          onClick={() => {
+                                            setPreselectedLoanId(loan.id);
+                                            setIsPaymentModalOpen(true);
+                                          }}
+                                          className="py-1 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-[11px] font-bold text-white transition-colors cursor-pointer"
+                                        >
+                                          Bayar
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Riwayat Pembayaran Terbaru Nasabah */}
+                          {summary.customerPayments.length > 0 && (
+                            <div>
+                              <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block mb-1.5">
+                                Riwayat Pembayaran Terakhir:
+                              </span>
+                              <div className="space-y-1">
+                                {summary.customerPayments.slice(0, 3).map((pay) => (
+                                  <div
+                                    key={pay.id}
+                                    className="p-2 bg-emerald-50/50 rounded-lg border border-emerald-100 text-xs flex items-center justify-between gap-2"
+                                  >
+                                    <div>
+                                      <span className="font-mono font-bold text-emerald-900">
+                                        {formatRupiah(pay.amount)}
+                                      </span>{' '}
+                                      <span className="text-slate-500 text-[11px]">
+                                        pada {formatDateIndo(pay.date)}
+                                      </span>
+                                      <span className="font-mono text-[10px] text-slate-400 block">
+                                        No. Kwitansi: {pay.invoiceNo}
+                                      </span>
+                                    </div>
+                                    <button
+                                      onClick={() => setSelectedReceipt(pay)}
+                                      className="py-1 px-2 rounded-lg bg-white hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                                    >
+                                      <Receipt className="w-3 h-3" />
+                                      <span>Kwitansi</span>
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })
               )}
             </div>
-
           </div>
         )}
 
         {/* ========================================================= */}
-        {/* TAB 4: PEMBAYARAN & KWITANSI DIGITAL */}
+        {/* TAMPILAN 3: LEMBAR KERJA HUTANG SAYA (PENCATATAN PRIBADI) */}
         {/* ========================================================= */}
-        {activeTab === 'PEMBAYARAN' && (
-          <div className="space-y-4">
-            
-            {/* Header and Pay Action */}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-              <div>
-                <h2 className="text-base font-bold text-slate-900 flex items-center gap-1.5">
-                  <Receipt className="w-5 h-5 text-blue-900" />
-                  <span>Pencatatan Pembayaran & Kwitansi ({payments.length})</span>
-                </h2>
-                <p className="text-xs text-slate-500">
-                  Setiap pembayaran menghasilkan E-Receipt resmi berstempel
-                </p>
-              </div>
-
-              <button
-                onClick={() => {
-                  setPreselectedLoanId(undefined);
-                  setIsPaymentModalOpen(true);
-                }}
-                className="py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-colors cursor-pointer"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Catat Pembayaran Baru</span>
-              </button>
-            </div>
-
-            {/* Search Input */}
-            <div className="relative">
-              <Search className="w-4 h-4 absolute left-3.5 top-3 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Cari nomor faktur (KW-...), nama nasabah, atau akad..."
-                value={paymentSearch}
-                onChange={(e) => setPaymentSearch(e.target.value)}
-                className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-white border border-slate-200 text-xs text-slate-900 outline-none focus:border-blue-700 shadow-xs"
-              />
-            </div>
-
-            {/* Payments List */}
-            <div className="space-y-2.5">
-              {filteredPayments.length === 0 ? (
-                <div className="p-8 bg-white rounded-2xl border border-slate-200 text-center text-slate-400">
-                  <Receipt className="w-8 h-8 mx-auto text-slate-300 mb-2" />
-                  <p className="text-xs font-medium">Tidak ada riwayat transaksi pembayaran.</p>
-                </div>
-              ) : (
-                filteredPayments.map((pay) => (
-                  <div
-                    key={pay.id}
-                    className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs hover:border-blue-300 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-                  >
-                    <div className="flex items-start gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-900 flex items-center justify-center shrink-0 mt-0.5">
-                        <Receipt className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-xs font-bold text-blue-900 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
-                            {pay.invoiceNo}
-                          </span>
-                          <span className="text-[10px] text-slate-400">
-                            {formatDateIndo(pay.date)}
-                          </span>
-                        </div>
-                        <h4 className="text-sm font-bold text-slate-900 mt-1">
-                          {pay.customerName}
-                        </h4>
-                        <p className="text-xs text-slate-600">
-                          {pay.loanTitle} · Angsuran ke-{pay.installmentNumber} dari {pay.totalInstallments}
-                        </p>
-                        <p className="text-[11px] text-slate-400 mt-0.5">
-                          Metode: {pay.paymentMethod} {pay.bankOrWalletDetail ? `(${pay.bankOrWalletDetail})` : ''}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100">
-                      <div className="sm:text-right">
-                        <span className="text-[10px] text-slate-400 block">Nominal Bayar:</span>
-                        <span className="font-mono text-sm font-black text-emerald-700">
-                          {formatRupiah(pay.amount)}
-                        </span>
-                        <span className="text-[10px] text-slate-500 block">
-                          Sisa: {formatRupiah(pay.remainingAfter)}
-                        </span>
-                      </div>
-
-                      {/* Tombol Kwitansi Digital Resmi (E-Receipt) */}
-                      <button
-                        onClick={() => setSelectedReceipt(pay)}
-                        className="py-2 px-3 rounded-xl bg-blue-900 hover:bg-blue-800 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
-                        title="Buka Kwitansi Digital Resmi"
-                      >
-                        <Receipt className="w-3.5 h-3.5" />
-                        <span>Kwitansi</span>
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-
-          </div>
+        {activeView === 'HUTANG' && (
+          <HutangManagementView
+            debts={debts}
+            onAddDebt={onAddDebt}
+            onUpdateDebt={onUpdateDebt}
+            onDeleteDebt={onDeleteDebt}
+            onAddDebtPayment={onAddDebtPayment}
+          />
         )}
 
         {/* ========================================================= */}
-        {/* TAB 5: EKSPOR LAPORAN PDF, PENGATURAN & BACKUP DATA */}
+        {/* TAMPILAN 4: LEMBAR KERJA JASA TOPUP (PENCATATAN PRIBADI) */}
         {/* ========================================================= */}
-        {activeTab === 'LAPORAN' && (
+        {activeView === 'TOPUP' && (
+          <TopupManagementView
+            topupRecords={topupRecords}
+            onAddTopup={onAddTopup}
+            onUpdateTopup={onUpdateTopup}
+            onDeleteTopup={onDeleteTopup}
+          />
+        )}
+
+        {/* ========================================================= */}
+        {/* TAMPILAN 5: JENDELA MENU ADMIN, LAPORAN & DATABASE */}
+        {/* ========================================================= */}
+        {activeView === 'ADMIN' && (
           <div className="space-y-3.5">
-            {/* Header & Aksi Cepat Atas */}
+            {/* Header & Aksi Cepat Atas Menu Admin */}
             <div className="space-y-2.5">
-              {/* Tombol Instal Aplikasi & Aksi Atas */}
+              {/* Tombol Kembali ke Neraca & Tombol PWA Install */}
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <PWAInstallButton />
+                <button
+                  onClick={() => setActiveView('NERACA')}
+                  className="py-1.5 px-3 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5" />
+                  <span>Kembali ke Neraca Keuangan</span>
+                </button>
 
                 <div className="flex flex-wrap items-center gap-2">
+                  <PWAInstallButton />
+
                   <button
                     onClick={() => setIsReportModalOpen(true)}
                     className="py-1.5 px-3 rounded-xl bg-blue-900 hover:bg-blue-800 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
@@ -1337,7 +1194,6 @@ Apakah ada yang dapat kami bantu mengenai informasi pembiayaan Anda? Terima kasi
               </div>
 
               <div className="pt-0.5 flex flex-wrap gap-2">
-                {/* Tombol 1: Backup ke Lokal (.json) */}
                 <button
                   onClick={handleDirectBackupLocal}
                   className="py-2 px-3.5 rounded-xl bg-blue-900 hover:bg-blue-800 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
@@ -1346,13 +1202,47 @@ Apakah ada yang dapat kami bantu mengenai informasi pembiayaan Anda? Terima kasi
                   <span>Backup ke Lokal (.json)</span>
                 </button>
 
-                {/* Tombol 2: Restore dari File (.json) */}
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   className="py-2 px-3.5 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
                 >
                   <Upload className="w-3.5 h-3.5 text-cyan-300" />
                   <span>Restore dari File (.json)</span>
+                </button>
+              </div>
+            </div>
+
+            {/* SEKSI KHUSUS: GOOGLE DRIVE CLOUD BACKUP & RESTORE */}
+            <div className="p-4 bg-gradient-to-r from-blue-900/5 via-indigo-900/5 to-cyan-900/5 rounded-2xl border-2 border-blue-200 shadow-xs space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-bold tracking-wider text-blue-900 bg-blue-100 px-2.5 py-0.5 rounded-full border border-blue-200 flex items-center gap-1.5">
+                    <Cloud className="w-3.5 h-3.5 text-blue-700" />
+                    <span>GOOGLE DRIVE CLOUD CADANGAN & RESTORE</span>
+                  </span>
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-800">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    API Drive Resmi
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <span>Cadangkan & Pulihkan Database ke Akun Google Drive</span>
+                </h3>
+                <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
+                  Cadangkan seluruh database Amar Bank (data nasabah, pinjaman, mutasi pembayaran, hutang pribadi, dan transaksi topup) langsung ke Google Drive pribadi Anda dengan aman.
+                </p>
+              </div>
+
+              <div className="pt-0.5 flex flex-wrap gap-2">
+                <button
+                  onClick={() => setIsGoogleDriveModalOpen(true)}
+                  className="py-2.5 px-4 rounded-xl bg-blue-900 hover:bg-blue-800 text-white font-bold text-xs flex items-center gap-2 shadow-sm transition-all cursor-pointer active:scale-95"
+                >
+                  <CloudUpload className="w-4 h-4 text-cyan-300" />
+                  <span>Buka Menu Google Drive (Backup & Restore)</span>
                 </button>
               </div>
             </div>
@@ -1471,75 +1361,111 @@ Apakah ada yang dapat kami bantu mengenai informasi pembiayaan Anda? Terima kasi
               </div>
             </div>
 
-            {/* SEKSI 5: RESET SEMUA DATA (FACTORY RESET DENGAN VERIFIKASI EMAIL) */}
-            <div className="p-5 bg-rose-50/70 rounded-2xl border border-rose-200 shadow-xs space-y-3">
+            {/* SEKSI 4: RESET SEMUA DATA (FACTORY RESET DENGAN VERIFIKASI EMAIL) */}
+            <div className="p-4 bg-rose-50/70 rounded-2xl border border-rose-200 shadow-xs space-y-2.5">
               <div className="flex items-center gap-2 text-rose-800">
-                <ShieldAlert className="w-5 h-5 text-rose-600" />
+                <ShieldAlert className="w-4 h-4 text-rose-600" />
                 <span className="text-xs font-bold uppercase tracking-wider">
                   Tindakan Berbahaya (Zona Reset)
                 </span>
               </div>
-              <h3 className="text-sm font-bold text-rose-950">
-                Reset Semua Data & Berkas (Kembali Seperti Baru)
-              </h3>
-              <p className="text-xs text-rose-700 leading-relaxed">
-                Kosongkan seluruh data debitur/pelanggan, akad kredit, dan mutasi pembayaran tanpa ada debitur satupun yang tersisa. Memerlukan kode OTP verifikasi khusus yang dikirimkan ke email admin ({currentAdmin.email}). Data akun admin dan pengaturan tetap terjaga.
-              </p>
+              <div>
+                <h3 className="text-sm font-bold text-rose-950">
+                  Reset Semua Data & Berkas (Kembali Seperti Baru)
+                </h3>
+                <p className="text-xs text-rose-700 mt-0.5 leading-relaxed">
+                  Menghapus seluruh daftar nasabah, akad kredit, dan riwayat pembayaran di perangkat ini.
+                </p>
+              </div>
 
-              <div className="pt-1">
+              <div className="pt-0.5">
                 <button
                   onClick={() => setIsResetModalOpen(true)}
-                  className="py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-2 transition-colors shadow-sm shadow-rose-600/20 cursor-pointer"
+                  className="py-2 px-3.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
                 >
-                  <Trash2 className="w-4 h-4" />
-                  <span>Reset & Bersihkan Semua Data (0 Debitur)</span>
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Buka Konfirmasi Reset Database</span>
                 </button>
               </div>
             </div>
-
           </div>
         )}
-
-        {/* Footer: The Update */}
-        <div className="pt-8 pb-4 text-center">
-          <p className="text-xs font-semibold tracking-wider text-slate-400 uppercase">
-            The Update
-          </p>
-        </div>
-
       </main>
 
-      {/* 3. FIXED BOTTOM TAB BAR (Navigation Anchor M3 Touch Ergonomics) */}
-      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 shadow-lg">
-        <div className="max-w-md mx-auto grid grid-cols-5 items-center h-16 px-1">
-          {[
-            { id: 'BERANDA', label: 'Beranda', icon: Home },
-            { id: 'NASABAH', label: 'Nasabah', icon: Users },
-            { id: 'KREDIT', label: 'Kredit', icon: CreditCard },
-            { id: 'PEMBAYARAN', label: 'Bayar', icon: Banknote },
-            { id: 'LAPORAN', label: 'Admin', icon: CircleUserRound },
-          ].map((tab) => {
-            const Icon = tab.icon;
-            const isActive = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id as TabType)}
-                className={`flex flex-col items-center justify-center py-1 transition-all cursor-pointer ${
-                  isActive ? 'text-blue-900 font-bold' : 'text-slate-500 hover:text-slate-800 font-medium'
-                }`}
-              >
-                <div className={`p-1 rounded-xl transition-colors ${isActive ? 'bg-blue-100 text-blue-900' : ''}`}>
-                  <Icon className="w-5 h-5" />
-                </div>
-                <span className="text-[10px] mt-0.5 tracking-tight">
-                  {tab.label}
-                </span>
-              </button>
-            );
-          })}
+      {/* 3. FOOTER NAVIGATION MENU: NERACA, KREDIT & PIUTANG, HUTANG, TOPUP, ADMIN */}
+      <footer className="fixed bottom-0 inset-x-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 py-1.5 px-2 shadow-lg">
+        <div className="max-w-xl mx-auto flex items-center justify-between gap-1">
+          {/* 1. Neraca Keuangan (Default Active saat login) */}
+          <button
+            onClick={() => setActiveView('NERACA')}
+            className={`flex-1 flex flex-col items-center py-1.5 px-1 rounded-xl transition-all cursor-pointer ${
+              activeView === 'NERACA'
+                ? 'bg-blue-900 text-white font-bold shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+            }`}
+            title="Neraca Keuangan"
+          >
+            <Scale className="w-4 h-4" />
+            <span className="text-[10px] mt-0.5 tracking-tight font-semibold">Neraca</span>
+          </button>
+
+          {/* 2. Menu Kredit & Piutang (yg sudah jadi ini) */}
+          <button
+            onClick={() => setActiveView('KREDIT')}
+            className={`flex-1 flex flex-col items-center py-1.5 px-1 rounded-xl transition-all cursor-pointer ${
+              activeView === 'KREDIT'
+                ? 'bg-blue-900 text-white font-bold shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+            }`}
+            title="Kredit & Piutang Nasabah"
+          >
+            <CreditCard className="w-4 h-4" />
+            <span className="text-[10px] mt-0.5 tracking-tight font-semibold">Kredit & Piutang</span>
+          </button>
+
+          {/* 3. Menu Hutang Saya */}
+          <button
+            onClick={() => setActiveView('HUTANG')}
+            className={`flex-1 flex flex-col items-center py-1.5 px-1 rounded-xl transition-all cursor-pointer ${
+              activeView === 'HUTANG'
+                ? 'bg-rose-600 text-white font-bold shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+            }`}
+            title="Lembar Kerja Hutang Saya"
+          >
+            <Banknote className="w-4 h-4" />
+            <span className="text-[10px] mt-0.5 tracking-tight font-semibold">Hutang</span>
+          </button>
+
+          {/* 4. Menu Topup Jasa */}
+          <button
+            onClick={() => setActiveView('TOPUP')}
+            className={`flex-1 flex flex-col items-center py-1.5 px-1 rounded-xl transition-all cursor-pointer ${
+              activeView === 'TOPUP'
+                ? 'bg-emerald-600 text-white font-bold shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+            }`}
+            title="Lembar Kerja Jasa Topup"
+          >
+            <Smartphone className="w-4 h-4" />
+            <span className="text-[10px] mt-0.5 tracking-tight font-semibold">Topup</span>
+          </button>
+
+          {/* 5. Menu Admin */}
+          <button
+            onClick={() => setActiveView('ADMIN')}
+            className={`flex-1 flex flex-col items-center py-1.5 px-1 rounded-xl transition-all cursor-pointer ${
+              activeView === 'ADMIN'
+                ? 'bg-slate-800 text-white font-bold shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+            }`}
+            title="Menu Admin & Backup"
+          >
+            <Settings className="w-4 h-4" />
+            <span className="text-[10px] mt-0.5 tracking-tight font-semibold">Admin</span>
+          </button>
         </div>
-      </nav>
+      </footer>
 
       {/* MODALS */}
       {isCustomerModalOpen && (
@@ -1592,7 +1518,7 @@ Apakah ada yang dapat kami bantu mengenai informasi pembiayaan Anda? Terima kasi
           onRecordPayment={(pay, updatedLoan) => {
             onRecordPayment(pay, updatedLoan);
             setIsPaymentModalOpen(false);
-            setSelectedReceipt(pay); // Automatically preview receipt!
+            setSelectedReceipt(pay); // Preview kwitansi otomatis!
           }}
           onClose={() => {
             setIsPaymentModalOpen(false);
@@ -1654,6 +1580,24 @@ Apakah ada yang dapat kami bantu mengenai informasi pembiayaan Anda? Terima kasi
         />
       )}
 
+      {isGoogleDriveModalOpen && (
+        <GoogleDriveBackupModal
+          customers={customers}
+          loans={loans}
+          payments={payments}
+          debts={debts}
+          topupRecords={topupRecords}
+          systemSettings={systemSettings}
+          onRestoreData={(payload) => {
+            onRestoreData(payload);
+            setSyncFeedback({
+              type: 'success',
+              message: 'Database berhasil dipulihkan dari Google Drive!',
+            });
+          }}
+          onClose={() => setIsGoogleDriveModalOpen(false)}
+        />
+      )}
     </div>
   );
 };
