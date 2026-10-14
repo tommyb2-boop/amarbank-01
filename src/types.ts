@@ -92,3 +92,50 @@ export interface SystemSettings {
   responsibleTitle: string; // e.g. 'Head of Retail & Credit Admin'
 }
 
+export interface DebtInstallment {
+  id: string;
+  date: string; // YYYY-MM-DD
+  amount: number;
+  notes?: string;
+  paymentMethod?: string;
+}
+
+export interface DebtRecord {
+  id: string; // e.g. HT-001
+  lenderName: string; // e.g. 'Bank BRI', 'Pak Syukri', 'Koperasi'
+  principalAmount: number; // Total hutang awal
+  paidAmount: number; // Total sudah dibayar
+  remainingAmount: number; // Sisa hutang
+  category?: string; // Modal Usaha, Modal Topup, Pribadi
+  startDate: string; // YYYY-MM-DD
+  dueDate: string; // YYYY-MM-DD
+  status: 'BELUM_LUNAS' | 'SEBAGIAN' | 'LUNAS';
+  notes?: string;
+  installments: DebtInstallment[];
+  createdAt: string;
+}
+
+export type TopupCategory =
+  | 'TOKEN_PLN'
+  | 'PULSA'
+  | 'PAKET_DATA'
+  | 'E_WALLET'
+  | 'TRANSFER_BANK'
+  | 'TAGIHAN'
+  | 'LAINNYA';
+
+export interface TopupRecord {
+  id: string; // e.g. TP-001
+  customerName: string;
+  targetNumber: string; // Nomor HP / No Meter PLN / ID Akun
+  category: TopupCategory;
+  productName: string; // e.g. 'Token PLN 50.000', 'DANA 100.000'
+  buyPrice: number; // Harga beli modal admin
+  sellPrice: number; // Harga jual ke pelanggan
+  profit: number; // Keuntungan bersih = sellPrice - buyPrice
+  paymentStatus: 'LUNAS' | 'KASBON';
+  notes?: string;
+  date: string; // ISO string
+  createdAt: string;
+}
+

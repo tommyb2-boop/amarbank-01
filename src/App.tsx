@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { AdminUser, Customer, Loan, Payment, NotificationItem, SystemSettings } from './types';
+import { AdminUser, Customer, Loan, Payment, NotificationItem, SystemSettings, DebtRecord, TopupRecord, DebtInstallment } from './types';
 import {
   INITIAL_ADMINS,
   INITIAL_CUSTOMERS,
@@ -7,6 +7,8 @@ import {
   INITIAL_PAYMENTS,
   INITIAL_NOTIFICATIONS,
   DEFAULT_SYSTEM_SETTINGS,
+  INITIAL_DEBTS,
+  INITIAL_TOPUPS,
 } from './data/initialData';
 import { AuthScreen } from './components/AuthScreen';
 import { AdminPortal } from './components/AdminPortal';
@@ -22,6 +24,8 @@ const STORAGE_KEY_PAYMENTS = 'amar_bank_payments_v2';
 const STORAGE_KEY_NOTIFS = 'amar_bank_notifs_v2';
 const STORAGE_KEY_SETTINGS = 'amar_bank_settings_v2';
 const STORAGE_KEY_SESSION = 'amar_bank_session_v2';
+const STORAGE_KEY_DEBTS = 'amar_bank_debts_v2';
+const STORAGE_KEY_TOPUP = 'amar_bank_topup_v2';
 
 export default function App() {
   // 1. Admins state (initial default PIN: 987654, email: dicoba.ngetes@gmail.com)
@@ -85,6 +89,26 @@ export default function App() {
       return saved !== null ? JSON.parse(saved) : INITIAL_NOTIFICATIONS;
     } catch {
       return INITIAL_NOTIFICATIONS;
+    }
+  });
+
+  // 6a. Debts state (Pencatatan Hutang Saya)
+  const [debts, setDebts] = useState<DebtRecord[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_DEBTS);
+      return saved !== null ? JSON.parse(saved) : INITIAL_DEBTS;
+    } catch {
+      return INITIAL_DEBTS;
+    }
+  });
+
+  // 6b. Topup state (Pencatatan Jasa Topup Pribadi)
+  const [topupRecords, setTopupRecords] = useState<TopupRecord[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_TOPUP);
+      return saved !== null ? JSON.parse(saved) : INITIAL_TOPUPS;
+    } catch {
+      return INITIAL_TOPUPS;
     }
   });
 
@@ -162,6 +186,22 @@ export default function App() {
       console.error(e);
     }
   }, [notifications]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY_DEBTS, JSON.stringify(debts));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [debts]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY_TOPUP, JSON.stringify(topupRecords));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [topupRecords]);
 
   useEffect(() => {
     try {
@@ -340,12 +380,58 @@ export default function App() {
     setSystemSettings(updatedSettings);
   };
 
+  // Debts Handlers
+  const handleAddDebt = (debt: DebtRecord) => {
+    setDebts((prev) => [debt, ...prev]);
+  };
+
+  const handleUpdateDebt = (updatedDebt: DebtRecord) => {
+    setDebts((prev) => prev.map((d) => (d.id === updatedDebt.id ? updatedDebt : d)));
+  };
+
+  const handleDeleteDebt = (debtId: string) => {
+    setDebts((prev) => prev.filter((d) => d.id !== debtId));
+  };
+
+  const handleAddDebtPayment = (debtId: string, installment: DebtInstallment) => {
+    setDebts((prev) =>
+      prev.map((d) => {
+        if (d.id !== debtId) return d;
+        const newPaid = d.paidAmount + installment.amount;
+        const newRemaining = Math.max(0, d.principalAmount - newPaid);
+        const newStatus = newRemaining <= 0 ? ('LUNAS' as const) : ('SEBAGIAN' as const);
+        return {
+          ...d,
+          paidAmount: newPaid,
+          remainingAmount: newRemaining,
+          status: newStatus,
+          installments: [...(d.installments || []), installment],
+        };
+      })
+    );
+  };
+
+  // Topup Handlers
+  const handleAddTopup = (record: TopupRecord) => {
+    setTopupRecords((prev) => [record, ...prev]);
+  };
+
+  const handleUpdateTopup = (updated: TopupRecord) => {
+    setTopupRecords((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+  };
+
+  const handleDeleteTopup = (id: string) => {
+    setTopupRecords((prev) => prev.filter((t) => t.id !== id));
+  };
+
   // Reset Semua Data (Kembali Bersih Tanpa Debitur Satupun, Kecuali Data Admin)
   const handleResetAllData = () => {
     setCustomers([]);
     setLoans([]);
     setPayments([]);
     setNotifications([]);
+    setDebts([]);
+    setTopupRecords([]);
   };
 
   // Restore Database from JSON
@@ -353,11 +439,15 @@ export default function App() {
     customers: Customer[];
     loans: Loan[];
     payments: Payment[];
+    debts?: DebtRecord[];
+    topupRecords?: TopupRecord[];
     systemSettings?: SystemSettings;
   }) => {
     if (Array.isArray(payload.customers)) setCustomers(payload.customers);
     if (Array.isArray(payload.loans)) setLoans(payload.loans);
     if (Array.isArray(payload.payments)) setPayments(payload.payments);
+    if (Array.isArray(payload.debts)) setDebts(payload.debts);
+    if (Array.isArray(payload.topupRecords)) setTopupRecords(payload.topupRecords);
     if (payload.systemSettings) setSystemSettings(payload.systemSettings);
   };
 
@@ -430,6 +520,8 @@ export default function App() {
             loans={loans}
             payments={payments}
             notifications={notifications}
+            debts={debts}
+            topupRecords={topupRecords}
             onAddCustomer={handleAddCustomer}
             onUpdateCustomer={handleUpdateCustomer}
             onAddLoan={handleAddLoan}
@@ -437,6 +529,13 @@ export default function App() {
             onMarkNotificationAsRead={handleMarkNotificationAsRead}
             onMarkAllNotificationsAsRead={handleMarkAllNotificationsAsRead}
             onClearAllNotifications={handleClearAllNotifications}
+            onAddDebt={handleAddDebt}
+            onUpdateDebt={handleUpdateDebt}
+            onDeleteDebt={handleDeleteDebt}
+            onAddDebtPayment={handleAddDebtPayment}
+            onAddTopup={handleAddTopup}
+            onUpdateTopup={handleUpdateTopup}
+            onDeleteTopup={handleDeleteTopup}
             onUpdateAdmin={handleUpdateAdmin}
             onUpdateSystemSettings={handleUpdateSystemSettings}
             onResetAllData={handleResetAllData}
