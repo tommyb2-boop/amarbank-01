@@ -38,9 +38,13 @@ export function formatDateTimeIndo(dateStr: string): string {
 }
 
 export function cleanPhoneNumber(phone: string): string {
+  if (!phone) return '';
   let cleaned = phone.replace(/\D/g, '');
   if (cleaned.startsWith('0')) {
     cleaned = '62' + cleaned.substring(1);
+  } else if (cleaned.startsWith('620')) {
+    // Menghilangkan nol jika user mengetik format +62 0812...
+    cleaned = '62' + cleaned.substring(3);
   } else if (!cleaned.startsWith('62')) {
     cleaned = '62' + cleaned;
   }
@@ -50,6 +54,58 @@ export function cleanPhoneNumber(phone: string): string {
 export function createWhatsAppLink(phone: string, message: string): string {
   const cleanPhone = cleanPhoneNumber(phone);
   return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
+}
+
+/**
+ * Membuka aplikasi WhatsApp langsung ke nomor tujuan dengan pesan yang sudah terisi.
+ * Dioptimalkan khusus untuk Android PWA / Chrome standalone menggunakan URI scheme native (whatsapp://)
+ * sehingga langsung membuka aplikasi WhatsApp di HP tanpa tertahan di browser web.
+ */
+export function openWhatsApp(phone: string, message: string): void {
+  const cleanPhone = cleanPhoneNumber(phone);
+  if (!cleanPhone || cleanPhone.length < 8) {
+    console.warn('Nomor WhatsApp nasabah tidak valid atau belum terdaftar:', phone);
+    return;
+  }
+
+  const encodedMessage = encodeURIComponent(message);
+  const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+
+  // 1. WhatsApp Native URL Scheme (Membuka aplikasi WhatsApp langsung di Android tanpa layar perantara browser)
+  const nativeUrl = `whatsapp://send?phone=${cleanPhone}&text=${encodedMessage}`;
+  // 2. URL Fallback Universal (Android App Links)
+  const webUrl = `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodedMessage}`;
+
+  if (isMobile) {
+    // Di Android PWA (Standalone WebAPK), pemicuan langsung melalui klik anchor protocol whatsapp://
+    // akan langsung ditangkap oleh Intent Filter sistem Android WhatsApp
+    try {
+      const link = document.createElement('a');
+      link.href = nativeUrl;
+      // Jangan gunakan target="_blank" di mobile PWA agar tidak membuka tab browser kosong
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch {
+      window.location.href = nativeUrl;
+    }
+
+    // Safety fallback jika whatsapp:// belum selesai dialihkan setelah 800ms
+    const startTime = Date.now();
+    setTimeout(() => {
+      // Jika browser masih aktif (belum beralih ke app WhatsApp), coba fallback
+      if (Date.now() - startTime < 1600 && document.hasFocus && document.hasFocus()) {
+        window.location.href = webUrl;
+      }
+    }, 800);
+  } else {
+    // Desktop: Buka WhatsApp Web atau aplikasi desktop
+    const desktopUrl = `https://web.whatsapp.com/send?phone=${cleanPhone}&text=${encodedMessage}`;
+    const win = window.open(desktopUrl, '_blank', 'noopener,noreferrer');
+    if (!win) {
+      window.open(webUrl, '_blank', 'noopener,noreferrer');
+    }
+  }
 }
 
 export function generateOTP(): string {
