@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Customer, Loan, Payment } from '../types';
-import { formatRupiah, formatDateIndo, createWhatsAppLink } from '../utils/formatters';
+import { formatRupiah, formatDateIndo, openWhatsApp } from '../utils/formatters';
 import { AmarBankLogo } from './AmarBankLogo';
 import { ReceiptModal } from './ReceiptModal';
 import { PWAInstallButton } from './PWAInstallButton';
@@ -77,8 +77,7 @@ Saya ingin melakukan konfirmasi informasi tagihan/angsuran saya:
 Mohon bantuannya untuk informasi rekening tujuan pembayaran atau verifikasi transaksi.
 Terima kasih.`;
 
-    const link = createWhatsAppLink(adminPhone, message);
-    window.open(link, '_blank');
+    openWhatsApp(adminPhone, message);
   };
 
   // Unduh data pelanggan saja dari Firebase untuk menyelaraskan data login & akun

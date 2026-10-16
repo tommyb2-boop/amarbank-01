@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Loan } from '../types';
-import { formatRupiah, formatDateIndo, createWhatsAppLink } from '../utils/formatters';
+import { formatRupiah, formatDateIndo, createWhatsAppLink, openWhatsApp } from '../utils/formatters';
 import { AmarBankLogo } from './AmarBankLogo';
 import { Printer, Share2, Copy, Check, X, FileCheck } from 'lucide-react';
 
@@ -46,8 +46,7 @@ Amar Bank - Mitra Keuangan Amanah.`;
   };
 
   const handleShareWhatsApp = () => {
-    const link = createWhatsAppLink(loan.customerPhone || '081234567890', receiptSummaryText);
-    window.open(link, '_blank');
+    openWhatsApp(loan.customerPhone || '081234567890', receiptSummaryText);
   };
 
   const handlePrint = () => {

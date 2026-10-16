@@ -59,6 +59,7 @@ export const TopupManagementView: React.FC<TopupManagementViewProps> = ({
   const [sellPrice, setSellPrice] = useState<number | ''>('');
   const [paymentStatus, setPaymentStatus] = useState<'LUNAS' | 'KASBON'>('LUNAS');
   const [notes, setNotes] = useState('');
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Quick preset suggestions
   const PRESETS = [
@@ -129,8 +130,9 @@ export const TopupManagementView: React.FC<TopupManagementViewProps> = ({
 
   const handleCreateTopup = (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
     if (!customerName.trim() || !productName.trim() || !buyPrice || !sellPrice) {
-      alert('Mohon isi nama pelanggan, produk, harga modal, dan harga jual');
+      setFormError('Mohon isi nama pelanggan, produk, harga modal, dan harga jual.');
       return;
     }
 
@@ -439,6 +441,11 @@ export const TopupManagementView: React.FC<TopupManagementViewProps> = ({
             </div>
 
             <form onSubmit={handleCreateTopup} className="p-5 space-y-3.5 max-h-[85vh] overflow-y-auto">
+              {formError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl font-medium">
+                  {formError}
+                </div>
+              )}
               {/* Presets Cepat */}
               <div>
                 <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">

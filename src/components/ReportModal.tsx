@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Customer, Loan, Payment, SystemSettings } from '../types';
+import { Customer, Loan, Payment, SystemSettings, DebtRecord, TopupRecord } from '../types';
 import { formatRupiah, formatDateIndo } from '../utils/formatters';
 import { AmarBankLogo } from './AmarBankLogo';
 import { Printer, Calendar, X, Download, Filter } from 'lucide-react';
@@ -9,6 +9,8 @@ interface ReportModalProps {
   customers: Customer[];
   loans: Loan[];
   payments: Payment[];
+  debts?: DebtRecord[];
+  topupRecords?: TopupRecord[];
   systemSettings: SystemSettings;
   onClose: () => void;
 }
@@ -19,6 +21,8 @@ export const ReportModal: React.FC<ReportModalProps> = ({
   customers,
   loans,
   payments,
+  debts = [],
+  topupRecords = [],
   systemSettings,
   onClose,
 }) => {
@@ -115,7 +119,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => downloadSpreadsheet(customers, filteredData.filteredLoans, filteredData.filteredPayments)}
+              onClick={() => downloadSpreadsheet(customers, filteredData.filteredLoans, filteredData.filteredPayments, debts, topupRecords, systemSettings)}
               className="flex items-center gap-1.5 py-2 px-3 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100 text-xs font-semibold transition-colors cursor-pointer"
             >
               <Download className="w-3.5 h-3.5" />

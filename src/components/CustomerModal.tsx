@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Customer } from '../types';
 import { UserPlus, X, Copy, Check, Share2, Shield, Phone, MapPin, FileText } from 'lucide-react';
-import { createWhatsAppLink } from '../utils/formatters';
+import { openWhatsApp } from '../utils/formatters';
 
 interface CustomerModalProps {
   existingCustomers: Customer[];
@@ -78,8 +78,7 @@ Gunakan data berikut untuk masuk ke Portal Mandiri Nasabah:
 Di portal ini, Anda dapat memantau tagihan, riwayat angsuran, serta mengunduh Kwitansi Digital resmi.
 Terima kasih,
 Amar Bank Indonesia`;
-    const waUrl = createWhatsAppLink(savedSuccessCustomer.phone, msg);
-    window.open(waUrl, '_blank');
+    openWhatsApp(savedSuccessCustomer.phone, msg);
   };
 
   return (

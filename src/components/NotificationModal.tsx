@@ -1,6 +1,6 @@
 import React from 'react';
 import { NotificationItem, Loan } from '../types';
-import { formatDateIndo, createWhatsAppLink, formatRupiah } from '../utils/formatters';
+import { formatDateIndo, createWhatsAppLink, openWhatsApp, formatRupiah } from '../utils/formatters';
 import { Bell, CheckCheck, Trash2, X, AlertTriangle, Clock, MessageSquare, CheckCircle2 } from 'lucide-react';
 
 interface NotificationModalProps {
@@ -38,8 +38,7 @@ Kami dari Amar Bank ingin menginformasikan pengingat jatuh tempo angsuran kredit
 Mohon melakukan pembayaran sebelum tanggal jatuh tempo melalui Transfer, QRIS, atau kasir Amar Bank.
 Terima kasih atas kerja samanya.`;
 
-    const waUrl = createWhatsAppLink(loan.customerPhone, message);
-    window.open(waUrl, '_blank');
+    openWhatsApp(loan.customerPhone, message);
   };
 
   return (

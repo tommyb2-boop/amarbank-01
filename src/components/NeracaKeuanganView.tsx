@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Customer, Loan, Payment, DebtRecord, TopupRecord, SystemSettings, AdminUser } from '../types';
-import { formatRupiah, formatDateIndo, formatDateTimeIndo } from '../utils/formatters';
+import { formatRupiah, formatDateIndo, formatDateTimeIndo, openWhatsApp } from '../utils/formatters';
 import { AmarBankLogo } from './AmarBankLogo';
 import {
   TrendingUp,
@@ -24,6 +24,7 @@ import {
   Receipt,
   Building,
   Cloud,
+  MessageCircle,
 } from 'lucide-react';
 
 interface NeracaKeuanganViewProps {
@@ -280,21 +281,26 @@ Dicetak dari Amar Bank Manajemen System`;
               </span>
               <span className="text-blue-200 text-xs">• {formatDateIndo(new Date().toISOString())}</span>
             </div>
-            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">
-              Amar Bank
-            </h1>
-            <h2 className="text-base sm:text-lg font-medium text-cyan-200 tracking-wide mt-0.5 flex items-center gap-2">
-              <Scale className="w-5 h-5 text-cyan-300 inline" />
-              <span>Neraca Keuangan</span>
-              <span className="text-white/60 text-xs">({systemSettings.cityName})</span>
-            </h2>
+            <div className="flex items-center gap-3">
+              <AmarBankLogo size="md" showText={false} />
+              <div>
+                <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">
+                  Amar Bank
+                </h1>
+                <h2 className="text-base sm:text-lg font-medium text-cyan-200 tracking-wide mt-0.5 flex items-center gap-2">
+                  <Scale className="w-5 h-5 text-cyan-300 inline" />
+                  <span>Neraca Keuangan</span>
+                  <span className="text-white/60 text-xs">({systemSettings.cityName})</span>
+                </h2>
+              </div>
+            </div>
           </div>
 
           <div className="flex items-center gap-2 self-start sm:self-center">
             {/* Tombol Salin Ringkasan ke WhatsApp */}
             <button
               onClick={handleCopyWhatsAppSummary}
-              className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 active:scale-95 transition-all text-xs font-semibold text-white flex items-center gap-1.5 border border-white/20 shadow-xs cursor-pointer backdrop-blur-xs"
+              className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 active:scale-95 transition-all text-xs font-semibold text-white flex items-center gap-1.5 border border-white/20 shadow-xs cursor-pointer backdrop-blur-xs"
               title="Salin rekap Neraca ke WhatsApp"
             >
               {copiedSuccess ? (
@@ -305,9 +311,60 @@ Dicetak dari Amar Bank Manajemen System`;
               ) : (
                 <>
                   <Share2 className="w-3.5 h-3.5 text-cyan-200" />
-                  <span>Salin Ringkasan</span>
+                  <span className="hidden sm:inline">Salin Teks</span>
+                  <span className="sm:hidden">Salin</span>
                 </>
               )}
+            </button>
+
+            {/* Tombol Kirim Langsung ke WhatsApp */}
+            <button
+              onClick={() => {
+                const todayStr = formatDateIndo(new Date().toISOString());
+                const text = `*AMAR BANK - NERACA KEUANGAN & LABA RUGI*
+Cabang: ${systemSettings.cityName}
+Tanggal Rekap: ${todayStr}
+Penanggung Jawab: ${currentAdmin.fullName}
+
+=============================
+1. REKAP PIUTANG & KREDIT NASABAH
+- Total Plafon Kredit: ${formatRupiah(creditSummary.totalPlafon)}
+- Angsuran Diterima: ${formatRupiah(creditSummary.totalTerbayar)}
+- Sisa Piutang Berjalan: ${formatRupiah(creditSummary.totalSisaPiutang)}
+- LABA MARGIN KREDIT DITERIMA: +${formatRupiah(creditSummary.totalLabaMarginDiterima)} (Kas Masuk)
+- Sisa Margin Berjalan: +${formatRupiah(creditSummary.totalSisaMargin)}
+- Total Potensi Margin: +${formatRupiah(creditSummary.totalMargin)}
+- Nasabah Aktif: ${creditSummary.activeLoansCount} pembiayaan
+
+2. REKAP HUTANG SAYA (KEWAJIBAN)
+- Total Pokok Hutang: ${formatRupiah(debtSummary.totalHutangPokok)}
+- Sudah Dicicil: ${formatRupiah(debtSummary.totalHutangDibayar)}
+- Sisa Hutang Wajib Bayar: ${formatRupiah(debtSummary.totalSisaHutang)}
+
+3. REKAP PENGHASILAN JASA TOPUP
+- Total Omzet: ${formatRupiah(topupSummary.totalOmzet)}
+- Modal/Deposit: ${formatRupiah(topupSummary.totalModal)}
+- LABA BERSIH TOPUP: +${formatRupiah(topupSummary.totalProfit)}
+- Transaksi Selesai: ${topupSummary.totalTrx} transaksi
+
+=============================
+*TOTAL LABA BERSIH OPERASIONAL KAS*:
+*+${formatRupiah(financialFlow.totalLabaBersihDiterima)}*
+*Total Seluruh Potensi Laba: +${formatRupiah(financialFlow.totalAkumulasiLabaUsaha)}*
+
+*POSISI NILAI BERSIH (NET ASSET)*:
+*${formatRupiah(financialFlow.netAssets)}*
+Status: ${financialFlow.isHealthy ? 'SURPLUS & SEHAT' : 'PERHATIAN DEFISIT'}
+=============================
+Dicetak dari Amar Bank Manajemen System`;
+                openWhatsApp(currentAdmin.phone || '081298765432', text);
+              }}
+              className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 transition-all text-xs font-bold text-white flex items-center gap-1.5 shadow-sm cursor-pointer"
+              title="Kirim Rekapan Neraca langsung ke WhatsApp Anda"
+            >
+              <MessageCircle className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Kirim ke WA</span>
+              <span className="sm:hidden">WA</span>
             </button>
 
             {/* Tombol Backup Google Drive Cepat */}

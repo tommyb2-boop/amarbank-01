@@ -56,6 +56,7 @@ export const HutangManagementView: React.FC<HutangManagementViewProps> = ({
   const [paymentAmount, setPaymentAmount] = useState<number | ''>('');
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
   const [paymentNotes, setPaymentNotes] = useState('');
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Summary Metrics
   const totalPrincipal = debts.reduce((sum, d) => sum + d.principalAmount, 0);
@@ -65,8 +66,9 @@ export const HutangManagementView: React.FC<HutangManagementViewProps> = ({
 
   const handleCreateDebt = (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
     if (!lenderName.trim() || !principalAmount || Number(principalAmount) <= 0) {
-      alert('Mohon isi nama pemberi pinjaman dan jumlah hutang dengan benar');
+      setFormError('Mohon isi nama pemberi pinjaman dan jumlah hutang dengan benar.');
       return;
     }
 
@@ -386,6 +388,11 @@ export const HutangManagementView: React.FC<HutangManagementViewProps> = ({
             </div>
 
             <form onSubmit={handleCreateDebt} className="p-5 space-y-4">
+              {formError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl font-medium">
+                  {formError}
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
                   Pemberi Pinjaman / Kreditor *

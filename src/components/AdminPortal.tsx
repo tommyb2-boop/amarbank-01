@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { AdminUser, Customer, Loan, Payment, NotificationItem, LoanStatus, SystemSettings, DebtRecord, TopupRecord, DebtInstallment } from '../types';
-import { formatRupiah, formatDateIndo, formatDateTimeIndo, createWhatsAppLink } from '../utils/formatters';
+import { formatRupiah, formatDateIndo, formatDateTimeIndo, createWhatsAppLink, openWhatsApp } from '../utils/formatters';
 import { AmarBankLogo } from './AmarBankLogo';
 import { CustomerModal } from './CustomerModal';
 import { LoanModal } from './LoanModal';
@@ -505,7 +505,7 @@ Kami dari *Amar Bank* (${systemSettings.cityName}) ingin menyampaikan informasi 
 Mohon konfirmasi jika ada yang perlu dikoordinasikan.
 Terima kasih.`;
 
-    window.open(createWhatsAppLink(customer.phone, message), '_blank');
+    openWhatsApp(customer.phone, message);
   };
 
   return (
@@ -1338,21 +1338,21 @@ Terima kasih.`;
                   Backup Data Lengkap ke Spreadsheet (.xls / Excel)
                 </h3>
                 <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
-                  Unduh rekapitulasi data nasabah, akad piutang, dan riwayat mutasi pembayaran ke dalam berkas Excel (.xls), atau kirimkan cadangan ke email.
+                  Unduh seluruh rekapitulasi data lengkap: Neraca Keuangan, Akad Kredit & Piutang, Riwayat Pembayaran, Lembar Kerja Hutang Saya, dan Transaksi Jasa Topup ke dalam berkas Excel (.xls), atau kirimkan cadangan lengkap ke email.
                 </p>
               </div>
 
               <div className="pt-0.5 flex flex-wrap gap-2">
                 <button
-                  onClick={() => downloadSpreadsheet(customers, loans, payments)}
+                  onClick={() => downloadSpreadsheet(customers, loans, payments, debts, topupRecords, systemSettings)}
                   className="py-2 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
                 >
                   <Download className="w-3.5 h-3.5" />
-                  <span>Unduh File Spreadsheet (.xls)</span>
+                  <span>Unduh File Spreadsheet Lengkap (.xls)</span>
                 </button>
 
                 <button
-                  onClick={() => openEmailBackup(currentAdmin.email || 'dicoba.ngetes@gmail.com', customers, loans, payments)}
+                  onClick={() => openEmailBackup(currentAdmin.email || 'dicoba.ngetes@gmail.com', customers, loans, payments, debts, topupRecords, systemSettings)}
                   className="py-2 px-3.5 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
                 >
                   <Mail className="w-3.5 h-3.5" />
@@ -1539,6 +1539,8 @@ Terima kasih.`;
           customers={customers}
           loans={loans}
           payments={payments}
+          debts={debts}
+          topupRecords={topupRecords}
           systemSettings={systemSettings}
           onClose={() => setIsReportModalOpen(false)}
         />
